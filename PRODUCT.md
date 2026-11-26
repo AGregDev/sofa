@@ -46,7 +46,10 @@ to start a game, switch apps or join friends in voice.
 - Streaming: YouTube in its TV interface inside Sofa; Netflix, Disney+, Prime
   Video and Twitch full screen in Firefox (kiosk profile), Chrome or Edge.
 - Uninstall games and apps from their options.
-- Sound output switcher, including the DualSense headphone jack over USB.
+- Headphones in the DualSense take Windows sound and Discord voice, and give
+  them back when unplugged (USB only: Windows has no controller audio over
+  Bluetooth). Sofa says so when headphones go in over Bluetooth.
+- Sound output switcher.
 - Go to desktop (the PS button brings Sofa back) and Quit Sofa.
 
 ## Deliberately not in Sofa

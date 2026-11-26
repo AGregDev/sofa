@@ -17,7 +17,20 @@
   let flushTimer = null;
   let lightOutDone = false;
   const want = { r: 0, g: 0, b: 0, mute: false, motor: 0 };
-  const state = { connected: false, battery: null, charging: false };
+  const state = { connected: false, battery: null, charging: false, headphones: null, mic: false, bt: false };
+  let jackSeen;
+  let jackTimer = null;
+
+  // The headphone jack settles for a moment before it counts, so plugging in doesn't
+  // flicker. The first reading after connecting only counts if something is plugged in.
+  function settleJack(hp, mic) {
+    if (hp === state.headphones) return;
+    const first = state.headphones == null;
+    state.headphones = hp;
+    state.mic = mic;
+    if (first && !hp) return;
+    emit('jack', { headphones: hp, mic, bt });
+  }
 
   const emit = (evt, v) => (listeners[evt] || []).forEach((fn) => fn(v));
 
@@ -51,6 +64,15 @@
     const mute = (v[off + 9] & 0x04) !== 0;
     if (mute && !muteHeld) emit('mute');
     muteHeld = mute;
+
+    // Headphone jack: the status byte after the battery, bit 0 headphones, bit 1 a mic.
+    const jack = v[off + 53];
+    const hp = (jack & 0x01) !== 0;
+    if (hp !== jackSeen) {
+      jackSeen = hp;
+      clearTimeout(jackTimer);
+      jackTimer = setTimeout(() => settleJack(hp, (jack & 0x02) !== 0), 300);
+    }
 
     // In full-report mode Windows' generic controller support (and so the browser's
     // Gamepad API) can't read the buttons, so Sofa builds the pad state itself,
@@ -98,6 +120,7 @@
       d.addEventListener('inputreport', onInput);
       dev = d;
       state.connected = true;
+      state.bt = bt;
       lastSent = '';
       lightOutDone = false;
       emit('battery', { ...state });
@@ -161,6 +184,11 @@
         state.connected = false;
         state.battery = null;
         emit('battery', { ...state });
+        // Headphones go with the controller: give the sound back.
+        clearTimeout(jackTimer);
+        jackSeen = undefined;
+        if (state.headphones) emit('jack', { headphones: false, mic: false, bt });
+        state.headphones = null;
       }
     });
   }
@@ -169,6 +197,8 @@
   window.DS = {
     get state() { return { ...state }; },
     on(evt, fn) { (listeners[evt] ||= []).push(fn); },
+    // For the QA run, which has no real controller.
+    test(evt, v) { emit(evt, v); },
     setLight(color) {
       const c = color ? toRgb(color) : { r: 0, g: 0, b: 0 };
       want.r = c.r; want.g = c.g; want.b = c.b;

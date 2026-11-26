@@ -10,7 +10,7 @@ the PS button always takes you home, and Windows stays out of sight until you le
 
 [![Release](https://img.shields.io/github/v/release/AGregDev/sofa?style=flat-square&color=f0a24b&labelColor=1c1a18)](https://github.com/AGregDev/sofa/releases/latest)
 [![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-efe9de?style=flat-square&labelColor=1c1a18)](#install)
-[![QA](https://img.shields.io/badge/QA-28%2F28%20passing-efe9de?style=flat-square&labelColor=1c1a18)](QA.md)
+[![QA](https://img.shields.io/badge/QA-32%2F32%20passing-efe9de?style=flat-square&labelColor=1c1a18)](QA.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-efe9de?style=flat-square&labelColor=1c1a18)](LICENSE)
 
 [**Download for Windows**](https://github.com/AGregDev/sofa/releases/latest) · [Features](#features) · [Controls](#controls) · [Build from source](#build-from-source)
@@ -60,7 +60,8 @@ your **Start menu apps** into one calm, fast interface you never need a mouse fo
 **Made for the DualSense, works with any pad**
 - No drivers: battery and charging in the top bar, lightbar in the selected game's colour, player light, and the **mute button** mutes you in Discord (or the Windows mic) with its LED.
 - **Button layouts:** match the controller, PlayStation, Xbox (A B X Y) or Nintendo (confirm and back swapped).
-- Sound output switcher, including the controller's headphone jack over USB.
+- **Headphones in the controller take the sound**, like a PS5: plug them into the DualSense and Windows audio and Discord voice move there; unplug and they move back. (Windows only offers the jack over a USB cable.)
+- Sound output switcher for everything else.
 
 **Streaming and voice**
 - YouTube in its TV interface inside Sofa. Netflix, Disney+, Prime Video and Twitch full screen in Firefox (Sofa can install it for you), Chrome or Edge, with their own TV sign-ins.

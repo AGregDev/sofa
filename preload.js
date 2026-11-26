@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('sofa', {
   audioDevices: () => ipcRenderer.invoke('audio:list'),
   setAudio: (id) => ipcRenderer.invoke('audio:set', id),
   micMute: (mode) => ipcRenderer.invoke('audio:mic', mode),
+  padAudio: (plugged) => ipcRenderer.invoke('audio:pad', !!plugged),
   browsers: () => ipcRenderer.invoke('browser:list'),
   installFirefox: () => ipcRenderer.invoke('browser:installFirefox'),
   uninstallCheck: (id) => ipcRenderer.invoke('uninstall:check', id),

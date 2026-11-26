@@ -167,6 +167,15 @@ exports.run = (win) => {
       await key('O');
       await shot('17-settings');
       check('T1', 'Settings has Go to desktop and Quit Sofa', await q(`['Go to desktop','Quit Sofa','Button layout'].every((w) => document.querySelector('#settings').textContent.includes(w))`));
+      // Focus two rows down, refresh the library underneath, then one more Down must land
+      // on the fourth row (a lost focus would jump back to the first).
+      await key('Down', 2);
+      const fourth = await q(`[...document.querySelectorAll('#settings .opt')][3].textContent`);
+      await js('window.__sofa.refreshLibrary()');
+      await wait(500);
+      await key('Down');
+      const now = await q(`document.querySelector('#settings .focus')?.textContent`);
+      check('T2', 'A library refresh under an open menu keeps its focus', now === fourth, now);
       await key('Escape');
 
       // ---- Social ----
@@ -228,6 +237,19 @@ exports.run = (win) => {
       check('K3', 'Typing in search finds library items', await q(`document.querySelectorAll('.kb-results .tile').length > 0`), await q(`document.querySelector('.kb-title').textContent`));
       await shot('26b-search');
       await key('Escape');
+
+      // ---- Controller headphones (simulated jack; the QA run never changes real devices) ----
+      const toastTitle = () => q(`document.querySelector('#toast').hidden ? '' : document.querySelector('#toast b').textContent`);
+      await js(`DS.test('jack', { headphones: true, mic: false, bt: true })`);
+      await wait(400);
+      check('A1', 'Headphones on a Bluetooth controller explain the USB cable', (await toastTitle()) === 'Headphones need a USB cable');
+      await shot('29-headphones-bt', 200);
+      await js(`DS.test('jack', { headphones: true, mic: false, bt: false })`);
+      await wait(600);
+      check('A2', 'Headphones on a USB controller move the sound there', (await toastTitle()) === 'Sound on the controller');
+      await js(`DS.test('jack', { headphones: false, mic: false, bt: false })`);
+      await wait(600);
+      check('A3', 'Unplugging gives the sound back', /^Sound back on/.test(await toastTitle()), await toastTitle());
 
       // ---- Input ----
       const dbl = await js(`(() => {

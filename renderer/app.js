@@ -287,7 +287,9 @@
       el.addEventListener('click', () => { setFocus(el, { silent: true }); activate(el); });
       el.addEventListener('mouseenter', () => { if (!document.body.classList.contains('no-cursor') && !S.layers.length) setFocus(el, { scroll: false }); });
     });
-    focused = null;
+    // Only drop focus that was on the old shelf: a menu or sheet open on top keeps its
+    // focus when the library refreshes underneath it.
+    if (focused && !document.contains(focused)) focused = null;
   }
 
   function restoreFocus() {
@@ -850,6 +852,31 @@
     Input.rumble(40, 0.3);
   });
 
+  // ---------- Controller headphones ----------
+  // Like a PS5: headphones in the controller's jack take Windows sound and Discord
+  // voice; unplugging gives both back. Windows only offers the jack over USB.
+  async function onJack(j) {
+    if (S.settings.padAudio === false) return;
+    if (j.headphones && j.bt) {
+      toast('Headphones need a USB cable', "Windows can't send sound to the controller over Bluetooth. Connect it with a USB cable and Sofa moves sound and Discord voice to it.", 9000);
+      return;
+    }
+    if (!j.headphones) {
+      const r = await api.padAudio(false);
+      if (r && r.restored) toast(`Sound back on ${r.restored.replace(/^\w+ \((.*)\)$/, '$1')}`, '');
+      return;
+    }
+    // Just after the cable goes in, Windows can take a moment to list the controller.
+    for (let i = 0; i < 5; i++) {
+      const r = await api.padAudio(true);
+      if (r && r.ok) { toast('Sound on the controller', r.discord ? 'Headphones connected. Discord voice too.' : 'Headphones connected.'); return; }
+      await new Promise((res) => setTimeout(res, 1500));
+      if (!DS.state.headphones && DS.state.connected) return;
+    }
+    toast('Headphones connected', "Windows hasn't listed the controller's audio yet. Choose it in System, Sound output.");
+  }
+  DS.on('jack', onJack);
+
   // ---------- Browser choice ----------
 
   const BROWSER = { firefox: 'Firefox', chrome: 'Chrome', edge: 'Edge' };
@@ -951,6 +978,7 @@
       <div class="opt" data-f data-act="layout">Button layout<span class="val">${LAYOUT_LABEL[s.controllerLayout || 'auto']}</span></div>
       <div class="opt" data-f data-act="browser">Browser<span class="val">${esc(S.items.find((i) => i.id === 'web:browser')?.browser || 'None')}</span></div>
       <div class="opt" data-f data-act="light">Controller light<span class="val">${LIGHT_LABEL[s.controllerLight || 'follow']}</span></div>
+      <div class="opt" data-f data-act="toggle" data-k="padAudio">Headphones in the controller take the sound${sw(s.padAudio !== false)}</div>
       <div class="opt" data-f data-act="toggle" data-k="keepInFront">Keep Sofa in front of the desktop${sw(s.keepInFront)}</div>
       <div class="opt" data-f data-act="toggle" data-k="fullscreen">Full screen${sw(s.fullscreen)}</div>
       <div class="opt" data-f data-act="toggle" data-k="sounds">Interface sounds${sw(s.sounds)}</div>
@@ -1361,6 +1389,6 @@
   });
 
   // Exposed for the screenshot test run.
-  window.__sofa = { S, move, switchTab, openSettings, openItemMenu, openKeyboard, goHome, openSetup, closeLayer };
+  window.__sofa = { S, move, switchTab, openSettings, openItemMenu, openKeyboard, goHome, openSetup, closeLayer, refreshLibrary: () => api.boot().then(apply) };
   boot();
 })();

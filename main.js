@@ -56,6 +56,19 @@ function pushView() {
   if (win && !win.isDestroyed()) win.webContents.send('library', view());
 }
 
+// Saves a program's icon as Explorer shows it, up to 256 px (scripts/icon.ps1), falling
+// back to Electron's 32 px file icon. Cached: each program is extracted once.
+function saveIcon(exe, out) {
+  if (fs.existsSync(out)) return Promise.resolve(true);
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  return new Promise((resolve) => execFile('powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(SCRIPTS, 'icon.ps1'), '-Path', exe, '-Out', out],
+    { windowsHide: true, timeout: 20000 }, async () => {
+      if (fs.existsSync(out)) return resolve(true);
+      try { fs.writeFileSync(out, (await app.getFileIcon(exe, { size: 'large' })).toPNG()); resolve(true); } catch { resolve(false); }
+    }));
+}
+
 let scanning = null;
 async function rescan({ fresh = true } = {}) {
   if (scanning) return scanning;
@@ -72,15 +85,12 @@ async function rescan({ fresh = true } = {}) {
       if (it.id === 'web:browser') { it.iconFrom = browser.exe; it.browser = browser.name; it.art = {}; }
       else if (it.source === 'web' && !it.launch.inApp) it.browser = browser ? browser.name : null;
     }
-    // Games without cover art (like RecompLauncher's) use their own program icon.
+    // Games without cover art (like RecompLauncher's) use their own program icon, at the
+    // 256 px size Windows keeps for Explorer, so it stays sharp in the hero.
     for (const it of library.items) {
       if (!it.iconFrom || it.art.capsule || it.art.icon) continue;
-      const out = path.join(cacheDir, 'icons', `${it.id.replace(/[^a-z0-9]/gi, '_')}-${path.basename(it.iconFrom, '.exe')}.png`);
-      try {
-        fs.mkdirSync(path.dirname(out), { recursive: true });
-        if (!fs.existsSync(out)) fs.writeFileSync(out, (await app.getFileIcon(it.iconFrom, { size: 'large' })).toPNG());
-        it.art.icon = out;
-      } catch { /* no icon */ }
+      const out = path.join(cacheDir, 'icons', `${it.id.replace(/[^a-z0-9]/gi, '_')}-${path.basename(it.iconFrom, '.exe')}-256.png`);
+      if (await saveIcon(it.iconFrom, out)) it.art.icon = out;
     }
     fs.writeFileSync(path.join(cacheDir, 'library.json'), JSON.stringify(library));
     pushView();
@@ -401,7 +411,8 @@ async function addRunning(r) {
   const itemId = identify(r.exe, r.hwnd);
   let icon = null;
   if (!itemId && r.exe) {
-    try { icon = (await app.getFileIcon(r.exe, { size: 'large' })).toDataURL(); } catch { /* no icon */ }
+    const out = path.join(cacheDir, 'icons', 'run-' + require('crypto').createHash('md5').update(r.exe.toLowerCase()).digest('hex') + '.png');
+    try { if (await saveIcon(r.exe, out)) icon = nativeImage.createFromPath(out).toDataURL(); } catch { /* no icon */ }
   }
   running = [{ hwnd: r.hwnd, title: r.title, exe: r.exe, itemId, icon }, ...running.filter((x) => x.hwnd !== r.hwnd)];
   pushRunning();
@@ -559,6 +570,33 @@ function ipc() {
     ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(SCRIPTS, 'audio.ps1'), ...args],
     { windowsHide: true, timeout: 20000 }, (err, out) => resolve(err ? null : String(out).trim())));
   ipcMain.handle('audio:list', async () => { try { return JSON.parse(await audio(['-List'])); } catch { return []; } });
+
+  // Like a PS5: headphones in the controller take Windows sound and Discord voice, and
+  // unplugging them gives both back. Windows only has the jack while the controller is
+  // on USB, as an audio device named after it.
+  const PAD_AUDIO = /wireless controller|dualsense/i;
+  let padPrev = null; // { windows, windowsName, discord } to restore on unplug
+  ipcMain.handle('audio:pad', async (_e, plugged) => {
+    if (SHOTS) return plugged ? { ok: true, name: 'Wireless Controller', discord: false } : { ok: true, restored: 'Speakers' };
+    let list = [];
+    try { list = JSON.parse(await audio(['-List'])); } catch { /* no devices */ }
+    if (plugged) {
+      const pad = list.find((d) => PAD_AUDIO.test(d.name));
+      if (!pad) return { ok: false, reason: 'no-device' };
+      const cur = list.find((d) => d.default);
+      if (!padPrev) padPrev = { windows: cur && cur.id !== pad.id ? cur.id : null, windowsName: cur && cur.id !== pad.id ? cur.name : '', discord: undefined };
+      if (!pad.default) await audio(['-Set', pad.id]);
+      const dc = await discord.setOutputMatching(PAD_AUDIO).catch(() => null);
+      if (dc && padPrev.discord === undefined) padPrev.discord = dc.prev;
+      return { ok: true, name: pad.name, discord: !!dc };
+    }
+    const prev = padPrev;
+    padPrev = null;
+    if (!prev) return { ok: true, restored: null };
+    if (prev.windows && list.some((d) => d.id === prev.windows)) await audio(['-Set', prev.windows]);
+    if (prev.discord !== undefined) await discord.setOutputDevice(prev.discord).catch(() => false);
+    return { ok: true, restored: prev.windowsName || null };
+  });
   // ---- Browser ----
   ipcMain.handle('browser:list', () => {
     const all = installedBrowsers();

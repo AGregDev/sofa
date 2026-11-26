@@ -27,6 +27,7 @@ uninstalls anything, and never talks to Discord.
 | R2 | △ on it offers Resume, Close, Force close |
 | R3 | Starting another game asks about the running one |
 | T1 | Settings has Go to desktop, Quit Sofa and Button layout |
+| T2 | A library refresh under an open menu keeps its focus (✕ still works) |
 | D1 | Social offers Connect Discord and nothing from Steam |
 | D2 | Discord setup shows five numbered steps |
 | D3 | The Client ID is picked up from the clipboard |
@@ -38,6 +39,9 @@ uninstalls anything, and never talks to Discord.
 | K1 | The on-screen Paste key types the clipboard |
 | K2 | Ctrl+V pastes into the keyboard |
 | K3 | Typing in search finds library items |
+| A1 | Headphones on a Bluetooth controller explain that the jack needs USB |
+| A2 | Headphones on a USB controller move the sound there (simulated) |
+| A3 | Unplugging gives the sound back (simulated) |
 | N1 | A press that arrives as both pad and key (Steam desktop layout) moves once |
 | E1 | No errors in the console |
 
@@ -82,8 +86,17 @@ These need a person, a TV and a controller.
 | M9 | Netflix opens full screen in the chosen browser; YouTube opens in its TV interface; hold ○ leaves |
 | M10 | Uninstall a Start menu app from its options; it disappears after the uninstaller finishes |
 | M11 | Moving quickly across a long row stays smooth on the TV |
+| M12 | Controller on USB: plugging headphones into it moves Windows sound and Discord voice there; unplugging moves both back |
+| M13 | Controller on Bluetooth: plugging headphones in shows the USB cable notice |
 
 ## Results
+
+### 1.2.0
+
+- Automated UI run: 32 of 32 PASS. T2 was confirmed to fail on the previous code.
+- Helper: 5 of 5 PASS (W1 to W5, on the live desktop).
+- Build and install: B1, B2, B3 PASS. The installer was built and installed, and Sofa and its helper were running 20 seconds later.
+- Manual: M1 to M13 not yet walked for 1.2.0. The controller under test was on Bluetooth, so M12 needs a USB cable.
 
 ### 1.1.0
 

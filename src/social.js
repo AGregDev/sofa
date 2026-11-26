@@ -247,6 +247,25 @@ class Discord {
     return out.filter(Boolean);
   }
   setVoice(patch) { return this.call('SET_VOICE_SETTINGS', patch); }
+
+  // Points Discord's voice output at the first device whose name matches and returns
+  // the device it used before, so it can be put back. Null when Discord isn't set up
+  // or has no such device.
+  async setOutputMatching(re) {
+    if (!this.configured || !(await this.connect())) return null;
+    const v = await this.call('GET_VOICE_SETTINGS');
+    const out = (v && v.output) || {};
+    const dev = (out.available_devices || []).find((d) => re.test(d.name || ''));
+    if (!dev) return null;
+    if (out.device_id !== dev.id) await this.call('SET_VOICE_SETTINGS', { output: { device_id: dev.id } });
+    return { prev: out.device_id || 'default', name: dev.name };
+  }
+
+  async setOutputDevice(id) {
+    if (!this.configured || !(await this.connect())) return false;
+    await this.call('SET_VOICE_SETTINGS', { output: { device_id: id || 'default' } });
+    return true;
+  }
 }
 
 module.exports = { seal, open, Discord, REDIRECT };
