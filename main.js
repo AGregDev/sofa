@@ -6,6 +6,7 @@ const { pathToFileURL } = require('url');
 const { Store } = require('./src/store');
 const { buildLibrary } = require('./src/library');
 const { Discord, REDIRECT } = require('./src/social');
+const steamGuide = require('./src/steamguide');
 
 const SHOTS = process.argv.includes('--shots');
 if (SHOTS) {
@@ -670,6 +671,15 @@ function ipc() {
     setTimeout(async () => { await pruneRunning(); pushRunning(); }, force ? 800 : 2000);
   });
   ipcMain.handle('desktop', () => goDesktop());
+  // ---- Steam and the PS button (src/steamguide.js) ----
+  ipcMain.handle('steam:guide', () => (SHOTS ? { installed: true, accounts: 1, off: false, running: true } : steamGuide.status(library.steamRoot)));
+  ipcMain.handle('steam:guideFix', async () => {
+    if (SHOTS) return { ok: true, changed: true, restarted: true };
+    // Never restart Steam under a Steam game that is running.
+    const game = running.map((r) => library.items.find((i) => i.id === identify(r.exe, r.hwnd))).find((it) => it && it.source === 'steam');
+    if (game) return { ok: false, reason: 'game', name: game.name };
+    return steamGuide.fix(library.steamRoot, { restart: true });
+  });
   ipcMain.handle('setup:reset', () => { store.data.setupDone = false; store.save(); return true; });
   ipcMain.handle('open', (_e, uri) => {
     if (SHOTS) return; // the screenshot run never opens anything outside Sofa
@@ -691,6 +701,15 @@ function ipc() {
   });
 }
 
+// While Steam is closed (Sofa usually starts first at sign-in), turn off its "Guide
+// button focuses Steam" setting so only Sofa answers the PS button. With Steam open the
+// UI asks first, because the fix restarts Steam. Settings can turn this off.
+async function keepSteamOffPsButton() {
+  if (SHOTS || store.data.settings.steamGuide === false || !library.steamRoot) return;
+  const r = await steamGuide.fix(library.steamRoot, { restart: false }).catch(() => null);
+  if (r && r.ok && r.changed && win && !win.isDestroyed()) win.webContents.send('steam:fixed');
+}
+
 app.on('second-instance', () => comeHome(null));
 
 app.whenReady().then(async () => {
@@ -704,7 +723,7 @@ app.whenReady().then(async () => {
   win.webContents.once('did-finish-load', () => {
     startPadWatcher();
     // Show the cached library at once, then refresh it in the background.
-    rescan({ fresh: !library.items.length ? false : true });
+    rescan({ fresh: !library.items.length ? false : true }).then(keepSteamOffPsButton).catch(() => {});
   });
   // Keyboard fallback for getting back to Sofa from anywhere.
   globalShortcut.register('Control+Alt+H', () => comeHome(null));

@@ -9,6 +9,7 @@ QA.md lists every check a release must pass.
 npm install
 npm start                      # run from source (uses your real profile)
 npm run qa                     # automated QA: drives every screen, writes shots/ and shots/qa.txt, exit 0 = all pass
+npm test                       # tests for src/steamguide.js on a made-up Steam config
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\qa-helper.ps1   # desktop QA for the PS-button helper (close Sofa first)
 powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -BuildOnly    # build dist\Sofa Setup <version>.exe
 ```
@@ -24,7 +25,8 @@ animation (see "README media" below).
 | `preload.js` | `window.sofa` bridge (the only API the UI can call) |
 | `preload-web.js` | YouTube TV window: controller to remote keys |
 | `src/library.js` | Steam, RecompLauncher and Start menu scan; categories; web and system tiles |
-| `src/social.js` | Discord local RPC (named pipe), OAuth with the user's own application, encrypted tokens |
+| `src/social.js` | Discord local RPC (named pipe), OAuth with the user's own application, encrypted tokens, voice output device |
+| `src/steamguide.js` | Turns off Steam's "Guide button focuses Steam" (`Controller_CheckGuideButton` in each account's `localconfig.vdf`) |
 | `src/store.js` | `sofa.json` settings, overrides, recent |
 | `src/shots.js` | the QA run (`--shots`): fake gamepad, checks, screenshots |
 | `scripts/padwatch.ps1` | background helper: joystick PS button, focus, launcher guard, Steam push-down |
@@ -49,9 +51,14 @@ animation (see "README media" below).
   its buttons from the browser Gamepad API and winmm until the controller is
   power-cycled. Sofa reads buttons from HID itself (`DS.pad`) and forwards the PS
   button to the helper (`pad:home`).
-- **Steam and the PS button:** the helper minimizes Steam when it grabs focus and
-  prints `steamgrab`; the UI then offers the one-time Steam settings fix. Do not
-  try to block Steam in other ways.
+- **Steam and the PS button:** Steam's "Guide button focuses Steam" is stored as
+  `Controller_CheckGuideButton` in `userdata/<id>/config/localconfig.vdf` (steamui.dll
+  maps the setting to that key). Steam rewrites the file from memory on exit, so
+  `src/steamguide.js` only edits it while Steam is closed: silently at Sofa start,
+  or after the person agrees to a Steam restart (`steam.exe -shutdown`, then
+  `-silent`). It keeps a `.sofa-backup` of the original, verifies the result by
+  parsing it back, and never restarts Steam under a running Steam game. The helper
+  still minimizes Steam if it grabs focus and prints `steamgrab`.
 - **Building:** NSIS fails on paths over 260 characters, so `setup.ps1` mirrors the
   project to `%TEMP%\sofa-build` and builds there.
 
@@ -66,7 +73,7 @@ tile. Copy is plain: say what happens, no "please", no exclamation marks.
 ## Releasing
 
 1. Bump `version` in `package.json`.
-2. `npm run qa` (all PASS) and `scripts\qa-helper.ps1` (no FAIL).
+2. `npm run qa` and `npm test` (all PASS), and `scripts\qa-helper.ps1` (no FAIL).
 3. Walk the manual checks in QA.md on real hardware.
 4. `setup.ps1 -BuildOnly`, then `gh release create v<version> "dist\Sofa Setup <version>.exe"`.
 

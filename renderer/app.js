@@ -979,6 +979,7 @@
       <div class="opt" data-f data-act="browser">Browser<span class="val">${esc(S.items.find((i) => i.id === 'web:browser')?.browser || 'None')}</span></div>
       <div class="opt" data-f data-act="light">Controller light<span class="val">${LIGHT_LABEL[s.controllerLight || 'follow']}</span></div>
       <div class="opt" data-f data-act="toggle" data-k="padAudio">Headphones in the controller take the sound${sw(s.padAudio !== false)}</div>
+      <div class="opt" data-f data-act="steamGuide">Keep Steam off the PS button${sw(s.steamGuide !== false)}</div>
       <div class="opt" data-f data-act="toggle" data-k="keepInFront">Keep Sofa in front of the desktop${sw(s.keepInFront)}</div>
       <div class="opt" data-f data-act="toggle" data-k="fullscreen">Full screen${sw(s.fullscreen)}</div>
       <div class="opt" data-f data-act="toggle" data-k="sounds">Interface sounds${sw(s.sounds)}</div>
@@ -999,6 +1000,13 @@
     openLayer($('#settings'), html, {
       acts: {
         toggle: (el) => flip(el, { [el.dataset.k]: !S.settings[el.dataset.k] }),
+        // Turning it on applies it now (asking first if that means restarting Steam);
+        // turning it off only stops Sofa from changing Steam again.
+        steamGuide: async (el) => {
+          const on = S.settings.steamGuide === false;
+          await flip(el, { steamGuide: on });
+          if (on) offerSteamGuideFix();
+        },
         motion: (el) => flip(el, { motion: S.settings.motion === 'reduced' ? 'full' : 'reduced' }),
         homeBtn: async (el) => {
           S.settings = await api.setSettings({ homeButton: S.settings.homeButton === 'combo' ? 'ps' : 'combo' });
@@ -1133,6 +1141,7 @@
     });
     const total = 7;
     api.browsers().then((b) => { S.browsers = b; if (step === 4) draw(); });
+    api.steamGuide().then((g) => { S.steamGuide = g; if (step === 5) draw(); });
     const progress = () => `<div class="step-no">${Array.from({ length: total }, (_, i) => `<i class="${i <= step ? 'on' : ''}"></i>`).join('')}<span>&nbsp;${step + 1} of ${total}</span></div>`;
     const counts = () => ({ games: inCat('games').length, media: inCat('media').length, apps: inCat('apps').length });
 
@@ -1192,14 +1201,16 @@
           <div class="body">${browserOpts()}<div class="group-gap"></div>${cont}</div>`;
       } else if (step === 5) {
         const tw = [
-          ['steam://settings/controller', 'Stop Steam answering the PS button', 'Steam', 'Controller: turn off "Guide button focuses Steam"'],
           ['ms-settings:gaming-gamebar', 'Stop Game Bar opening on the PS button', 'Game Bar', 'Turn off opening Game Bar with the controller button'],
           ['ms-settings:display', 'Make text readable from the couch', 'Display', 'Scale: 150% or more'],
           ['ms-settings:sound', 'Send sound to the TV or receiver', 'Sound', 'Output: your TV or receiver'],
         ];
+        // Steam's own setting is changed by Sofa itself (see offerSteamGuideFix).
+        const st = S.steamGuide;
+        const steamRow = st && st.installed ? `<div class="opt tweak" data-f data-act="steamFix"><span class="sep">Stop Steam answering the PS button<span class="who">${st.off ? 'Done: "Guide button focuses Steam" is off' : 'Sofa turns off "Guide button focuses Steam" for you'}</span></span><span class="val">${st.off ? icon('check') : 'Fix'}</span></div>` : '';
         h = `${progress()}<h1>Recommended changes</h1>
-          <p class="lead">So only Sofa answers the PS button, and text is readable from the couch. Each one opens the right settings page.</p>
-          <div class="body">${tw.map(([u, l, v, d]) => `<div class="opt tweak" data-f data-act="open" data-u="${u}"><span class="sep">${esc(l)}<span class="who">${esc(d)}</span></span><span class="val">Open ${v}</span></div>`).join('')}
+          <p class="lead">So only Sofa answers the PS button, and text is readable from the couch.</p>
+          <div class="body">${steamRow}${tw.map(([u, l, v, d]) => `<div class="opt tweak" data-f data-act="open" data-u="${u}"><span class="sep">${esc(l)}<span class="who">${esc(d)}</span></span><span class="val">Open ${v}</span></div>`).join('')}
           <div class="group-gap"></div>${cont}</div>`;
       } else {
         h = `${progress()}<h1>Ready</h1>
@@ -1214,6 +1225,19 @@
           applySettings();
         },
         open: (o) => api.open(o.dataset.u),
+        steamFix: async () => {
+          if (S.steamGuide && S.steamGuide.off) return toast('Steam is already set up', 'Only Sofa answers the PS button.');
+          await offerSteamGuideFix();
+          // Redraw this step once the fix is done (a Steam restart takes a while), or
+          // after a minute, or as soon as setup moves on.
+          const t0 = Date.now();
+          const watch = setInterval(async () => {
+            if (!S.layers.includes(layer) || step !== 5) return clearInterval(watch);
+            if (S.layers[S.layers.length - 1] !== layer) return; // the question is still open
+            const st = await api.steamGuide();
+            if ((st && st.off) || Date.now() - t0 > 60000) { clearInterval(watch); S.steamGuide = st; if (step === 5) draw(); }
+          }, 1500);
+        },
         homeBtn: async (o) => {
           S.settings = await api.setSettings({ homeButton: S.settings.homeButton === 'combo' ? 'ps' : 'combo' });
           o.querySelector('.val').innerHTML = homeLabel();
@@ -1373,20 +1397,50 @@
     toastTimer = setTimeout(() => { el.classList.add('out'); setTimeout(() => { el.hidden = true; }, 300); }, ms);
   }
 
-  // Steam also answers the PS button while its "Guide button focuses Steam" setting
-  // is on. Sofa pushes Steam back down, then offers the one-time fix (once per run).
+  // ---------- Steam and the PS button ----------
+  // Steam also answers the PS button while its "Guide button focuses Steam" setting is
+  // on. Sofa turns it off by itself while Steam is closed (main.js); with Steam open the
+  // change needs a Steam restart, so Sofa asks first.
+
+  const STEAM_RESULT = {
+    'still-running': ["Steam didn't close", 'Close Steam yourself, then try again.'],
+    'no-steam': ["Steam isn't installed", ''],
+    'no-account': ['Sign in to Steam once first', 'Then Sofa can change the setting.'],
+    write: ["Couldn't change Steam's setting", 'Nothing was changed. You can turn it off in Steam, Settings, Controller.'],
+  };
+
+  async function fixSteamGuide() {
+    toast('Fixing Steam', 'Steam closes, changes one setting, and starts again in the background.', 30000);
+    const r = await api.steamGuideFix();
+    if (r && r.ok) {
+      S.settings = await api.setSettings({ steamGuide: true });
+      toast(r.changed ? 'Steam no longer takes the PS button' : 'Steam was already set up', r.restarted ? 'Steam restarted in the background.' : '');
+    } else if (r && r.reason === 'game') toast(`Close ${r.name} first`, 'Sofa won’t restart Steam while a Steam game is running.');
+    else { const [t, b] = STEAM_RESULT[r && r.reason] || STEAM_RESULT.write; toast(t, b, 8000); }
+    return r;
+  }
+
+  // Asks before restarting Steam; with Steam closed it just fixes it.
+  async function offerSteamGuideFix({ fromGrab = false } = {}) {
+    const st = await api.steamGuide();
+    if (!st || !st.installed || st.off) return st && st.off ? toast('Steam is already set up', 'Only Sofa answers the PS button.') : null;
+    if (!st.running) return fixSteamGuide();
+    Sfx.play('open');
+    openLayer($('#confirm'), `<div class="panel">
+      <h3>${fromGrab ? 'Steam is also using the PS button' : 'Keep Steam off the PS button?'}</h3>
+      <p>Sofa can turn off Steam's <b>Guide button focuses Steam</b> for you. Steam closes and starts again in the background, so finish any Steam game first.</p>
+      <div class="opt" data-f data-act="fix">${icon('check')}Fix it now</div>
+      <div class="opt" data-f data-act="no">${icon('close')}Not now</div>
+    </div>`, { acts: { fix: () => { closeLayer(true); fixSteamGuide(); }, no: () => closeLayer() } });
+  }
+
   let steamTipShown = false;
   api.onSteamGrab(() => {
     if (steamTipShown || S.layers.length) return;
     steamTipShown = true;
-    Sfx.play('open');
-    openLayer($('#confirm'), `<div class="panel">
-      <h3>Steam is also using the PS button</h3>
-      <p>Sofa sent Steam back, but the screen will flicker each time until Steam lets go of the button. In Steam's settings, open Controller and turn off <b>Guide button focuses Steam</b>.</p>
-      <div class="opt" data-f data-act="open">${icon('settings')}Open Steam's controller settings</div>
-      <div class="opt" data-f data-act="no">${icon('close')}Not now</div>
-    </div>`, { acts: { open: () => { closeLayer(true); api.open('steam://settings/controller'); }, no: () => closeLayer() } });
+    offerSteamGuideFix({ fromGrab: true });
   });
+  api.onSteamFixed(() => toast('Steam no longer takes the PS button', 'Sofa turned off "Guide button focuses Steam" while Steam was closed.', 7000));
 
   // Exposed for the screenshot test run.
   window.__sofa = { S, move, switchTab, openSettings, openItemMenu, openKeyboard, goHome, openSetup, closeLayer, refreshLibrary: () => api.boot().then(apply) };

@@ -103,7 +103,7 @@ exports.run = (win) => {
       await shot('05-setup-browser', 1500);
       await key('Down', 8); await key('Return');
       await shot('06-setup-tweaks');
-      check('S4', 'Setup recommends the Steam guide button fix', await q(`document.querySelector('.setup').textContent.includes('Guide button focuses Steam')`));
+      check('S4', 'Setup offers to fix Steam\'s guide button setting itself', await q(`!!document.querySelector('.setup [data-act="steamFix"]') && document.querySelector('.setup').textContent.includes('Guide button focuses Steam')`));
       await key('Down', 8); await key('Return');
       await key('Return');
       await wait(800);
@@ -166,7 +166,7 @@ exports.run = (win) => {
       // ---- Settings ----
       await key('O');
       await shot('17-settings');
-      check('T1', 'Settings has Go to desktop and Quit Sofa', await q(`['Go to desktop','Quit Sofa','Button layout'].every((w) => document.querySelector('#settings').textContent.includes(w))`));
+      check('T1', 'Settings has Go to desktop, Quit Sofa and the Steam PS button switch', await q(`['Go to desktop','Quit Sofa','Button layout','Keep Steam off the PS button'].every((w) => document.querySelector('#settings').textContent.includes(w))`));
       // Focus two rows down, refresh the library underneath, then one more Down must land
       // on the fourth row (a lost focus would jump back to the first).
       await key('Down', 2);
@@ -250,6 +250,15 @@ exports.run = (win) => {
       await js(`DS.test('jack', { headphones: false, mic: false, bt: false })`);
       await wait(600);
       check('A3', 'Unplugging gives the sound back', /^Sound back on/.test(await toastTitle()), await toastTitle());
+
+      // ---- Steam and the PS button (the QA run fakes Steam: open, setting on) ----
+      wc.send('steam:grab');
+      await wait(900);
+      check('V1', 'When Steam grabs the PS button, Sofa offers to fix it', await q(`!document.querySelector('#confirm').hidden && document.querySelector('#confirm').textContent.includes('Fix it now')`));
+      await shot('30-steam-fix', 200);
+      await key('Return');
+      await wait(900);
+      check('V2', 'Fixing it reports that Steam no longer takes the PS button', (await toastTitle()) === 'Steam no longer takes the PS button', await toastTitle());
 
       // ---- Input ----
       const dbl = await js(`(() => {

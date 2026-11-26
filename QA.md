@@ -15,7 +15,7 @@ uninstalls anything, and never talks to Discord.
 | S1 | First run opens setup |
 | S2 | On the controller check, tapping ✕ and ○ only lights them |
 | S3 | Holding ✕ moves on |
-| S4 | Setup recommends the Steam "Guide button focuses Steam" fix |
+| S4 | Setup offers to turn off Steam's "Guide button focuses Steam" itself |
 | S5 | Finishing setup shows Home |
 | H1 | Tabs are Home, Games, Media, Apps, Social, System (no Phone, no Steam friends) |
 | H2 | Home rows stay short (15 tiles at most) |
@@ -26,7 +26,7 @@ uninstalls anything, and never talks to Discord.
 | R1 | PS from a game puts it first on Home, focused |
 | R2 | △ on it offers Resume, Close, Force close |
 | R3 | Starting another game asks about the running one |
-| T1 | Settings has Go to desktop, Quit Sofa and Button layout |
+| T1 | Settings has Go to desktop, Quit Sofa, Button layout and Keep Steam off the PS button |
 | T2 | A library refresh under an open menu keeps its focus (✕ still works) |
 | D1 | Social offers Connect Discord and nothing from Steam |
 | D2 | Discord setup shows five numbered steps |
@@ -42,8 +42,33 @@ uninstalls anything, and never talks to Discord.
 | A1 | Headphones on a Bluetooth controller explain that the jack needs USB |
 | A2 | Headphones on a USB controller move the sound there (simulated) |
 | A3 | Unplugging gives the sound back (simulated) |
+| V1 | When Steam grabs the PS button, Sofa offers to fix it |
+| V2 | Fixing it reports that Steam no longer takes the PS button (simulated) |
 | N1 | A press that arrives as both pad and key (Steam desktop layout) moves once |
 | E1 | No errors in the console |
+
+## 1b. Steam settings editor: `npm test`
+
+`src/steamguide.js` edits Steam's own config, so it has its own tests. They run on a
+made-up `localconfig.vdf` in a temp folder, never on a real Steam install.
+
+| ID | Check |
+| --- | --- |
+| G1 | A file without the key reads as Steam's default (on) |
+| G2 | Turning it off adds the key with 0 |
+| G3 | Adding the key changes nothing else in the file |
+| G4 | A file with the setting on reads 1 |
+| G5 | Turning it off replaces only the value |
+| G6 | Windows line endings are kept |
+| G7 | A file it cannot verify is refused |
+| G8 | Status finds the account with the setting on |
+| G9 | With Steam open and no permission to restart it, nothing changes |
+| G10 | With Steam closed, the fix writes the file |
+| G11 | The original file is kept as a backup |
+| G12 | No temp file is left behind |
+| G13 | Running it again changes nothing |
+| G14 | Status then reports it off |
+| G15 | A missing Steam is reported, not guessed |
 
 ## 2. Helper on the desktop: `scripts\qa-helper.ps1`
 
@@ -88,8 +113,18 @@ These need a person, a TV and a controller.
 | M11 | Moving quickly across a long row stays smooth on the TV |
 | M12 | Controller on USB: plugging headphones into it moves Windows sound and Discord voice there; unplugging moves both back |
 | M13 | Controller on Bluetooth: plugging headphones in shows the USB cable notice |
+| M14 | With Steam's "Guide button focuses Steam" on and Steam open: Fix it now restarts Steam in the background, and the PS button no longer brings Steam forward |
+| M15 | With that setting on and Steam closed: starting Sofa turns it off and says so |
 
 ## Results
+
+### 1.3.0
+
+- Automated UI run: 34 of 34 PASS.
+- Steam settings editor (`npm test`): 15 of 15 PASS.
+- Helper: 5 of 5 PASS (W1 to W5, on the live desktop).
+- Build and install: B1, B2 and B3 PASS. Sofa and its helper were running 25 seconds after install. Steam's `localconfig.vdf` was byte-for-byte unchanged and no backup was written, which is correct because the setting was already off.
+- On this PC Steam's setting was already off. The helper log shows no Steam focus grabs on any PS press since 23:03, against one on every press before 22:34. M14 and M15 (the Steam restart and the change at Sofa start) have not run on real hardware.
 
 ### 1.2.0
 

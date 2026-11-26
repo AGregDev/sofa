@@ -41,4 +41,7 @@ contextBridge.exposeInMainWorld('sofa', {
   closeRunning: (hwnd, force) => ipcRenderer.invoke('running:close', hwnd, !!force),
   desktop: () => ipcRenderer.invoke('desktop'),
   onSteamGrab: (fn) => ipcRenderer.on('steam:grab', () => fn()),
+  onSteamFixed: (fn) => ipcRenderer.on('steam:fixed', () => fn()),
+  steamGuide: () => ipcRenderer.invoke('steam:guide'),
+  steamGuideFix: () => ipcRenderer.invoke('steam:guideFix'),
 });

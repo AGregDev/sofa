@@ -10,6 +10,7 @@ const DEFAULTS = {
     keepInFront: true, // console-style: Sofa returns whenever nothing else is open
     homeButton: 'ps', // 'ps' | 'combo' (Create + Options, for when Steam keeps the PS button)
     controllerLayout: 'auto', // 'auto' | 'ps' | 'xbox' | 'nintendo'
+    steamGuide: true, // keep Steam's "Guide button focuses Steam" off (src/steamguide.js)
     padAudio: true, // headphones in the controller take the sound (USB only on Windows)
     controllerLight: 'follow', // 'follow' (the selected game's colour) | 'amber' | 'off'
     browser: 'auto', // 'auto' | 'firefox' | 'chrome' | 'edge'

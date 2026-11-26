@@ -66,9 +66,10 @@ to start a game, switch apps or join friends in voice.
 - **Discord** only lets an application control voice for the people who created
   it, so each person makes a small Discord application once (two minutes, guided
   in Sofa). There is no shared "Sofa" application that could work for everyone.
-- **Steam** also listens to the PS button. Sofa pushes Steam back down when it
-  grabs the screen, and asks the user once to turn off Steam's "Guide button
-  focuses Steam" setting, which removes the conflict for good.
+- **Steam** also listens to the PS button while its "Guide button focuses Steam"
+  setting is on. Sofa turns that setting off itself: silently while Steam is closed,
+  or after asking while Steam is open, because Steam must restart to pick it up.
+  Until then Sofa pushes Steam back down whenever it grabs the screen.
 - **The DualSense headphone jack** only works over USB on Windows.
 - **Windows only.** Sofa uses PowerShell helpers for the joystick API, window
   focus and audio endpoints.

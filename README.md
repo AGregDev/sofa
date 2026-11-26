@@ -10,7 +10,7 @@ the PS button always takes you home, and Windows stays out of sight until you le
 
 [![Release](https://img.shields.io/github/v/release/AGregDev/sofa?style=flat-square&color=f0a24b&labelColor=1c1a18)](https://github.com/AGregDev/sofa/releases/latest)
 [![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-efe9de?style=flat-square&labelColor=1c1a18)](#install)
-[![QA](https://img.shields.io/badge/QA-32%2F32%20passing-efe9de?style=flat-square&labelColor=1c1a18)](QA.md)
+[![QA](https://img.shields.io/badge/QA-49%2F49%20passing-efe9de?style=flat-square&labelColor=1c1a18)](QA.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-efe9de?style=flat-square&labelColor=1c1a18)](LICENSE)
 
 [**Download for Windows**](https://github.com/AGregDev/sofa/releases/latest) · [Features](#features) · [Controls](#controls) · [Build from source](#build-from-source)
@@ -50,6 +50,7 @@ your **Start menu apps** into one calm, fast interface you never need a mouse fo
 **A console home**
 - Starts with Windows and stays in front: the desktop, taskbar and Start menu never show unless you choose **Go to desktop**. The PS button brings Sofa back.
 - **PS button from any game or app** opens Home with that app first: resume, close or force close. Starting a second game asks first.
+- **Steam stays off the PS button:** Sofa switches off Steam's own PS-button setting for you, so Steam no longer jumps in front.
 - Home rows: Running, Discord voice, Jump back in, Favorites, then Games, Media and Apps, each ending in an "All ..." tile.
 
 **Your whole library**
@@ -75,7 +76,7 @@ your **Start menu apps** into one calm, fast interface you never need a mouse fo
 
 1. Download the **Sofa Setup** installer from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa.
 2. Follow the one-minute setup with your controller.
-3. Recommended: in Steam, **Settings, Controller**, turn off **Guide button focuses Steam**. Steam otherwise also answers the PS button; Sofa pushes it back, but the screen flickers. Sofa offers to open that page the first time it happens.
+3. Steam also listens to the PS button. Sofa turns off Steam's **Guide button focuses Steam** for you: by itself when Steam is closed, or after asking when Steam is open (Steam restarts in the background). You can turn this off in Settings.
 
 Windows SmartScreen may warn that the installer is unsigned: choose **More info, Run anyway**.
 
@@ -125,6 +126,7 @@ npm start
 | --- | --- |
 | `npm start` | Run Sofa from source |
 | `npm run qa` | Automated QA: drives every screen with a simulated controller, writes screenshots and `shots/qa.txt` |
+| `npm test` | Tests for the Steam settings editor, on a made-up config |
 | `powershell -ExecutionPolicy Bypass -File scripts\qa-helper.ps1` | Desktop QA for the PS-button helper |
 | `powershell -ExecutionPolicy Bypass -File setup.ps1` | Build the installer and install it (`-BuildOnly` to just build) |
 
