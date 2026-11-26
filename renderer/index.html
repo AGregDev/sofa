@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' sofa:; img-src 'self' sofa: data: https://cdn.discordapp.com; style-src 'self' 'unsafe-inline'; font-src 'self' sofa:">
+  <title>Sofa</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="pad-ps">
+  <div id="app" aria-hidden="false">
+    <section class="hero" id="hero">
+      <div class="hero-art" id="heroArt"></div>
+      <div class="hero-scrim"></div>
+      <div class="hero-text" id="heroText"></div>
+    </section>
+
+    <header class="top">
+      <div class="brand"><img src="../assets/icon.png" alt=""><span>Sofa</span></div>
+      <nav class="tabs" id="tabs">
+        <span class="key key-sm" data-k="L1">L1</span>
+        <div class="tab-list" id="tabList"></div>
+        <span class="key key-sm" data-k="R1">R1</span>
+        <i class="tab-line" id="tabLine"></i>
+      </nav>
+      <div class="top-right"><span class="pad-batt" id="padBatt" hidden></span><div class="clock" id="clock"></div></div>
+    </header>
+
+    <main class="shelf" id="shelf"></main>
+
+    <footer class="hints" id="hints"></footer>
+  </div>
+
+  <!-- Layers: only the top one takes controller input -->
+  <div class="layer sheet" id="menu" hidden></div>
+  <div class="layer sheet" id="settings" hidden></div>
+  <div class="layer dialog" id="confirm" hidden></div>
+  <div class="layer keyboard" id="search" hidden></div>
+  <div class="layer keyboard picker" id="cover" hidden></div>
+  <div class="layer launch" id="launch" hidden></div>
+  <div class="layer setup" id="setup" hidden></div>
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="brand.js"></script>
+  <script src="icons.js"></script>
+  <script src="sound.js"></script>
+  <script src="input.js"></script>
+  <script src="dualsense.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
