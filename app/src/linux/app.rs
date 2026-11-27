@@ -351,7 +351,9 @@ impl Runner {
             }
             "type" => {
                 for c in rest.chars() {
-                    self.key_down(KeyIn { key: Key::Character(c.to_string().into()), text: Some(c.to_string()), repeat: false }, t);
+                    let k = Key::Character(c.to_string().into());
+                    self.key_down(KeyIn { key: k.clone(), text: Some(c.to_string()), repeat: false }, t);
+                    self.key_up(&k);
                 }
             }
             "home" => self.home_button(false, t),

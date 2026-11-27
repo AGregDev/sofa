@@ -14,6 +14,22 @@ points to, then `../../CLAUDE.md`.
   `%APPDATA%\sofa`, and uninstalls from Installed apps (`Sofa.exe --uninstall`).
 - The 1.x features still missing are listed in `../../PRODUCT.md`, "Not yet in 2.x".
 
+## Linux (branch `linux-appimage`, not released yet)
+
+- Sofa builds and runs on Linux (ADR-010): an X11 window (XWayland under Wayland) drawn with
+  tiny-skia and swash, evdev pads (the PS button works over a game), the DualSense over hidraw
+  for lights and mute, EWMH for focus, Running windows and the Steam push-down, desktop entries
+  for apps, MPRIS, `pactl`, Discord's socket, rustls, sealed secrets. The Windows build is as it
+  was (73 of 73 QA, clippy clean). Platform code lives in `app/src/linux/`; see CLAUDE.md.
+- CI (`.github/workflows/linux.yml`) builds on Ubuntu 20.04, runs clippy, the tests and the
+  Linux QA run (`qa/qa.sh`, the same 73 checks) under Xvfb, packs
+  `Sofa-Setup-<version>-x86_64.AppImage`, and attaches it to a published release.
+- Not tried on Linux hardware: controllers, PS over a game on GNOME Wayland, Xorg and KDE, the
+  lights, launching, sound, sleep (QA.md, LB2 to LB6 and LM1 to LM17).
+- Gaps, in PRODUCT.md "Linux (2.3)": Wayland-native windows are invisible (a GNOME Shell
+  extension is the fix), the guard sees only desktop and panel windows, no Ctrl+Alt+H, no
+  gamescope, CPU drawing at 4K.
+
 ## New in 2.2.2
 
 - **Spotify's redirect has a port** (`spotify::REDIRECT`, `PORT`). The dashboard refuses
@@ -94,6 +110,9 @@ points to, then `../../CLAUDE.md`.
 - QA mode ignores the real controller.
 
 ## Next, in order
+
+0. Linux: walk LB2 to LB6 and LM1 to LM17 on Ubuntu (GNOME, Wayland and Xorg) and on an
+   Arch-based KDE system; then a GNOME Shell extension that lists and activates Wayland windows.
 
 1. Walk the manual checks in QA.md on the TV with a DualSense (M1 to M15) and record them
    (2.1.0 was released before they were walked).

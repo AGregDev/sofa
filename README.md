@@ -4,17 +4,18 @@
 
 # Sofa
 
-**Your Windows gaming PC, as a console.**<br>
+**Your gaming PC, as a console.** On Windows and Linux.<br>
 A controller-first home screen for the TV: every game, stream and app on one screen,<br>
-the PS button always takes you home, and Windows stays out of sight until you leave.
+the PS button always takes you home, and the desktop stays out of sight until you leave.
 
 [![Release](https://img.shields.io/github/v/release/AGregDev/sofa?style=flat-square&color=f0a24b&labelColor=1c1a18)](https://github.com/AGregDev/sofa/releases/latest)
 [![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-efe9de?style=flat-square&labelColor=1c1a18)](#install)
+[![Linux AppImage](https://img.shields.io/badge/Linux-AppImage-efe9de?style=flat-square&labelColor=1c1a18)](#install-on-linux)
 [![QA](https://img.shields.io/badge/QA-73%2F73%20passing-efe9de?style=flat-square&labelColor=1c1a18)](QA.md)
 [![Memory](https://img.shields.io/badge/memory-~60%20MB-efe9de?style=flat-square&labelColor=1c1a18)](#small-and-fast)
 [![License: MIT](https://img.shields.io/badge/license-MIT-efe9de?style=flat-square&labelColor=1c1a18)](LICENSE)
 
-[**Download for Windows**](https://github.com/AGregDev/sofa/releases/latest) · [Features](#features) · [Controls](#controls) · [Build from source](#build-from-source)
+[**Download for Windows**](https://github.com/AGregDev/sofa/releases/latest) · [**Linux**](#install-on-linux) · [Features](#features) · [Controls](#controls) · [Build from source](#build-from-source)
 
 <br>
 
@@ -31,8 +32,9 @@ Sofa is the missing home screen: it starts with Windows, sits in front like a co
 dashboard, and gathers **Steam**, **RecompLauncher** ports, **streaming services** and
 your **Start menu apps** into one calm, fast interface you never need a mouse for.
 
-Sofa 2 is a single native executable, written in Rust with Direct2D. No browser engine,
-no helper processes: about **60 MB of memory** on Home, and almost nothing while you play.
+Sofa 2 is a single native executable, written in Rust: Direct2D on Windows, a CPU renderer
+on an X11 window on Linux. No browser engine, no helper processes: about **60 MB of memory**
+on Home, and almost nothing while you play.
 
 <table>
   <tr>
@@ -99,6 +101,37 @@ Windows SmartScreen may warn that the file is unsigned: choose **More info, Run 
 To remove Sofa, use **Settings, Apps, Installed apps, Sofa, Uninstall**; your settings stay
 in `%APPDATA%\sofa`.
 
+## Install on Linux
+
+For Ubuntu, Debian, Fedora, Arch and the rest, on GNOME, KDE or any X11 desktop (Wayland
+sessions run Sofa through XWayland, which they all have).
+
+1. Download **`Sofa-Setup-<version>-x86_64.AppImage`** from the [latest release](https://github.com/AGregDev/sofa/releases/latest).
+2. Make it executable and run it once:
+
+   ```bash
+   chmod +x Sofa-Setup-*-x86_64.AppImage
+   ./Sofa-Setup-*-x86_64.AppImage
+   ```
+
+   It installs for your user only, with no password: the program goes to `~/.local/bin/sofa`,
+   Sofa appears in your apps, and it starts. Running a newer setup AppImage updates it.
+3. On the first screen, choose whether Sofa starts when you sign in and keeps Steam off the
+   PS button, then **Continue**.
+
+For the DualSense's lightbar and mute button, Sofa needs the access Steam's udev rules give
+(already there when Steam is installed from your distribution; otherwise
+`sudo apt install steam-devices` on Ubuntu and Debian, or your distribution's `steam-devices`
+or `steam` package). Without it every button still works.
+
+If the AppImage does not start, your system lacks FUSE: install `fuse3` (or `libfuse2`), or
+run it with `--appimage-extract-and-run`. To remove Sofa, use **Uninstall Sofa** on Sofa's icon
+in your apps (right-click), or run `~/.local/bin/sofa --uninstall`; your settings stay in
+`~/.config/sofa`.
+
+What Linux does not do yet, and why (Wayland apps have no Running card; no Ctrl+Alt+H), is
+listed in [PRODUCT.md](PRODUCT.md#linux-23).
+
 ## Controls
 
 | Button | Action |
@@ -116,9 +149,11 @@ in `%APPDATA%\sofa`.
 
 Keyboard: arrows, Enter, Esc, Q and E for sections, M options, F search, O settings,
 the minus and equals keys for volume, Home for the quick menu, type to search, Ctrl+V to
-paste. **Ctrl+Alt+H** brings Sofa to the front from anywhere.
+paste. **Ctrl+Alt+H** brings Sofa to the front from anywhere (Windows).
 
 ## Build from source
+
+### Windows
 
 Needs Windows 10 or 11, Rust (stable, the `x86_64-pc-windows-gnu` toolchain) and MinGW-w64
 binutils on `PATH` (for example [WinLibs](https://winlibs.com), in a folder without spaces).
@@ -140,7 +175,35 @@ cargo build --release
 
 Copy `sofa.exe` to a name containing "setup" (`Sofa-Setup-2.2.2.exe`) and it installs itself.
 
+### Linux
+
+Needs Rust (stable, 1.97 or later, from [rustup](https://rustup.rs)) and a C compiler (for
+rustls' cryptography: `build-essential` on Ubuntu and Debian, `base-devel` on Arch). No
+development packages: Sofa loads the desktop's own X11, xkbcommon and PulseAudio libraries
+when it runs.
+
+```bash
+git clone https://github.com/AGregDev/sofa.git
+cd sofa
+cargo build --release
+target/release/sofa --windowed     # try it in a window
+target/release/sofa --install      # install it like the AppImage does
+```
+
+| Command | What it does |
+| --- | --- |
+| `cargo build --release` | Builds `target/release/sofa` |
+| `cargo test --workspace` | The same unit tests, plus the Linux renderer's, desktop entries' and sound's |
+| `xvfb-run -a bash qa/qa.sh` | The automated QA run (73 checks, as on Windows), screenshots in `shots/linux/` |
+| `bash packaging/linux/build-appimage.sh` | Packs `dist/Sofa-Setup-<version>-x86_64.AppImage` |
+
+The [Linux workflow](.github/workflows/linux.yml) does all four on every push, on Ubuntu
+20.04 so the AppImage runs on any distribution with glibc 2.31 or later, and attaches the
+AppImage to each release.
+
 ## How it works
+
+On Windows:
 
 ```
 sofa.exe ─ one window, one message loop: draws only while something moves
@@ -158,6 +221,12 @@ sofa.exe ─ one window, one message loop: draws only while something moves
 - The DualSense thread keeps reading while a game has focus, so the PS button reaches Sofa from inside any game. Windows tells Sofa when another window comes to the front; there is no polling helper.
 - The Start menu listing and program icons come from a short-lived `sofa.exe --scan` at low priority, so Windows' icon code never stays in Sofa's memory.
 - Settings, overrides and play history live in `%APPDATA%\sofa\sofa.json`, the same file Sofa 1.x used.
+On Linux the same modules sit on Linux's own pieces: a winit X11 window drawn with tiny-skia
+and swash (Figtree), evdev for every pad and hidraw for the DualSense's lights, EWMH for the
+window manager, desktop entries and icon themes for the apps (listed by the `--scan` child),
+MPRIS for Now playing, `pactl` for sound, Discord's Unix socket, and rustls for HTTPS.
+Settings live in `~/.config/sofa/sofa.json`, with the same keys.
+
 - Sofa 2 was ported from the Electron app with [rust-anything](https://github.com/erkamyaman/rust-anything): the VDF parser is checked against 172 cases recorded from the original. The port's decisions are in [docs/port](docs/port/DECISIONS.md).
 
 More in [PRODUCT.md](PRODUCT.md) (what Sofa promises and why), [CLAUDE.md](CLAUDE.md) (architecture and rules for contributors and coding agents) and [QA.md](QA.md).
@@ -170,7 +239,8 @@ More in [PRODUCT.md](PRODUCT.md) (what Sofa promises and why), [CLAUDE.md](CLAUD
 - The welcome scene is rendered in Blender from `assets/blender/make_assets.py`.
 
 PlayStation, DualSense and the PlayStation logo are trademarks of Sony Interactive
-Entertainment. Steam is a trademark of Valve. Xbox is a trademark of Microsoft.
+Entertainment. Steam is a trademark of Valve. Xbox is a trademark of Microsoft. Linux is a
+trademark of Linus Torvalds.
 Sofa is a free, unofficial project and is not affiliated with or endorsed by any of them.
 
 ## License
