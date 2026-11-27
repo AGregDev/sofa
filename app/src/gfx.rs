@@ -22,100 +22,29 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 pub const WM_IMAGE: u32 = 0x8000 + 1; // WM_APP + 1: a decoded image is ready
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Rect {
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
+pub use crate::draw::{Align, Color, Fit, Rect};
+use crate::draw::{PathSink, Pt, icon_path_data, tone, walk_path};
+
+/// Direct2D's form of a rectangle.
+trait D2dRect {
+    fn d2d(&self) -> D2D_RECT_F;
 }
 
-impl Rect {
-    pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Rect {
-        Rect { x, y, w, h }
-    }
-    pub fn right(&self) -> f32 {
-        self.x + self.w
-    }
-    pub fn bottom(&self) -> f32 {
-        self.y + self.h
-    }
-    /// Scaled around its centre.
-    pub fn scaled(&self, s: f32) -> Rect {
-        let (w, h) = (self.w * s, self.h * s);
-        Rect::new(self.x - (w - self.w) / 2.0, self.y - (h - self.h) / 2.0, w, h)
-    }
-    pub fn inset(&self, d: f32) -> Rect {
-        Rect::new(self.x + d, self.y + d, self.w - 2.0 * d, self.h - 2.0 * d)
-    }
+impl D2dRect for Rect {
     fn d2d(&self) -> D2D_RECT_F {
         D2D_RECT_F { left: self.x, top: self.y, right: self.x + self.w, bottom: self.y + self.h }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Color(pub f32, pub f32, pub f32, pub f32);
+/// Direct2D's form of a colour.
+trait D2dColor {
+    fn d2d(self) -> D2D1_COLOR_F;
+}
 
-impl Color {
-    pub const fn hex(v: u32) -> Color {
-        Color(((v >> 16) & 255) as f32 / 255.0, ((v >> 8) & 255) as f32 / 255.0, (v & 255) as f32 / 255.0, 1.0)
-    }
-    pub const fn alpha(self, a: f32) -> Color {
-        Color(self.0, self.1, self.2, self.3 * a)
-    }
-    /// '#rrggbb' or 'hsl(h s% l%)' (the Electron app's colour formats).
-    pub fn parse(s: &str) -> Option<Color> {
-        if let Some(h) = s.strip_prefix('#') {
-            return u32::from_str_radix(h, 16).ok().map(Color::hex);
-        }
-        let inner = s.strip_prefix("hsl(")?.strip_suffix(')')?;
-        let n: Vec<f32> = inner.split([' ', ',']).filter(|p| !p.is_empty()).filter_map(|p| p.trim_end_matches('%').parse().ok()).collect();
-        Some(Color::hsl(*n.first()?, *n.get(1)? / 100.0, *n.get(2)? / 100.0))
-    }
-    /// Hue in degrees, saturation and lightness from 0 to 1.
-    pub fn hsl(h: f32, s: f32, l: f32) -> Color {
-        let h = h / 360.0;
-        let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
-        let p = 2.0 * l - q;
-        let f = |mut t: f32| {
-            t = t.rem_euclid(1.0);
-            if t < 1.0 / 6.0 {
-                p + (q - p) * 6.0 * t
-            } else if t < 0.5 {
-                q
-            } else if t < 2.0 / 3.0 {
-                p + (q - p) * (2.0 / 3.0 - t) * 6.0
-            } else {
-                p
-            }
-        };
-        Color(f(h + 1.0 / 3.0), f(h), f(h - 1.0 / 3.0), 1.0)
-    }
-    /// As 8-bit red, green and blue.
-    pub fn rgb8(self) -> (u8, u8, u8) {
-        let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        (c(self.0), c(self.1), c(self.2))
-    }
+impl D2dColor for Color {
     fn d2d(self) -> D2D1_COLOR_F {
         D2D1_COLOR_F { r: self.0, g: self.1, b: self.2, a: self.3 }
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Align {
-    Left,
-    Center,
-    Right,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub enum Fit {
-    Cover,
-    /// Cover, cropped around a vertical focal point (CSS `object-position: center 30%`).
-    CoverAt(f32),
-    Contain,
-    /// Contain, anchored bottom-left (game logos over the hero art).
-    ContainLeftBottom,
 }
 
 // ---------- Images ----------
@@ -132,48 +61,6 @@ struct Decoded {
     key: ImageKey,
     pixels: Option<(u32, u32, Vec<u8>)>,
     tone: Option<Color>,
-}
-
-/// The art's most vivid colour (Sofa 1.x's `vibrantColor`): hues on a 12 x 12 grid, averaged
-/// with saturated, bright pixels counting most, as a mid-light colour. None for grey art.
-/// `px` is premultiplied BGRA, `w` x `h`.
-pub(crate) fn tone(px: &[u8], w: u32, h: u32) -> Option<Color> {
-    if w == 0 || h == 0 || px.len() < (w * h * 4) as usize {
-        return None;
-    }
-    let (mut x, mut y, mut sum) = (0f32, 0f32, 0f32);
-    for gy in 0..12u32 {
-        for gx in 0..12u32 {
-            let (px_x, px_y) = ((gx * 2 + 1) * w / 24, (gy * 2 + 1) * h / 24);
-            let i = ((px_y * w + px_x) * 4) as usize;
-            let a = f32::from(px[i + 3]) / 255.0;
-            if a <= 0.0 {
-                continue;
-            }
-            let (b, g, r) = (f32::from(px[i]) / 255.0 / a, f32::from(px[i + 1]) / 255.0 / a, f32::from(px[i + 2]) / 255.0 / a);
-            let (max, min) = (r.max(g).max(b), r.min(g).min(b));
-            let sat = if max == 0.0 { 0.0 } else { (max - min) / max };
-            let weight = a * sat * sat * max + 0.0001;
-            if max - min < 1e-4 {
-                // Grey has no hue: it only weakens the others.
-                sum += weight;
-                continue;
-            }
-            let hue = if max == r {
-                ((g - b) / (max - min)) % 6.0
-            } else if max == g {
-                (b - r) / (max - min) + 2.0
-            } else {
-                (r - g) / (max - min) + 4.0
-            } * std::f32::consts::PI
-                / 3.0;
-            x += hue.cos() * weight;
-            y += hue.sin() * weight;
-            sum += weight;
-        }
-    }
-    let strength = (x.hypot(y) / sum.max(1e-6)).min(1.0);
-    (strength >= 0.15).then(|| Color::hsl((y.atan2(x).to_degrees() + 360.0) % 360.0, 0.85, 0.58))
 }
 
 enum Slot {
@@ -235,11 +122,15 @@ struct PathBuilder {
     filled: bool,
 }
 
-impl PathBuilder {
-    fn begin(&mut self, p: Vector2) {
+fn v(x: f32, y: f32) -> Vector2 {
+    Vector2 { X: x, Y: y }
+}
+
+impl PathSink for PathBuilder {
+    fn begin(&mut self, p: Pt) {
         self.end(false);
         // SAFETY: the sink is open until `close`.
-        unsafe { self.sink.BeginFigure(p, if self.filled { D2D1_FIGURE_BEGIN_FILLED } else { D2D1_FIGURE_BEGIN_HOLLOW }) };
+        unsafe { self.sink.BeginFigure(v(p.0, p.1), if self.filled { D2D1_FIGURE_BEGIN_FILLED } else { D2D1_FIGURE_BEGIN_HOLLOW }) };
         self.open = true;
     }
     fn end(&mut self, closed: bool) {
@@ -249,215 +140,30 @@ impl PathBuilder {
             self.open = false;
         }
     }
-}
-
-fn v(x: f32, y: f32) -> Vector2 {
-    Vector2 { X: x, Y: y }
-}
-
-/// Reads SVG numbers, including `1.5.5` (two numbers) and `-12.77.04`.
-struct Nums<'a> {
-    s: &'a [u8],
-    i: usize,
-}
-
-impl Nums<'_> {
-    fn skip(&mut self) {
-        while self.i < self.s.len() && (self.s[self.i] == b' ' || self.s[self.i] == b',' || self.s[self.i] == b'\n' || self.s[self.i] == b'\t') {
-            self.i += 1;
-        }
+    fn line(&mut self, p: Pt) {
+        // SAFETY: the sink is open until `close`.
+        unsafe { self.sink.AddLine(v(p.0, p.1)) };
     }
-    fn more(&mut self) -> bool {
-        self.skip();
-        self.i < self.s.len() && (self.s[self.i].is_ascii_digit() || matches!(self.s[self.i], b'-' | b'+' | b'.'))
+    fn cubic(&mut self, c1: Pt, c2: Pt, p: Pt) {
+        // SAFETY: the sink is open until `close`.
+        unsafe { self.sink.AddBezier(&D2D1_BEZIER_SEGMENT { point1: v(c1.0, c1.1), point2: v(c2.0, c2.1), point3: v(p.0, p.1) }) };
     }
-    fn num(&mut self) -> f32 {
-        self.skip();
-        let start = self.i;
-        if self.i < self.s.len() && matches!(self.s[self.i], b'-' | b'+') {
-            self.i += 1;
-        }
-        let mut dot = false;
-        while self.i < self.s.len() {
-            let c = self.s[self.i];
-            if c.is_ascii_digit() {
-                self.i += 1;
-            } else if c == b'.' && !dot {
-                dot = true;
-                self.i += 1;
-            } else if (c == b'e' || c == b'E') && self.i > start {
-                self.i += 1;
-                if self.i < self.s.len() && matches!(self.s[self.i], b'-' | b'+') {
-                    self.i += 1;
-                }
-            } else {
-                break;
-            }
-        }
-        std::str::from_utf8(&self.s[start..self.i]).ok().and_then(|t| t.parse().ok()).unwrap_or(0.0)
+    fn quad(&mut self, c1: Pt, p: Pt) {
+        // SAFETY: the sink is open until `close`.
+        unsafe { self.sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT { point1: v(c1.0, c1.1), point2: v(p.0, p.1) }) };
     }
-    fn flag(&mut self) -> bool {
-        self.skip();
-        let f = self.i < self.s.len() && self.s[self.i] == b'1';
-        self.i += 1;
-        f
-    }
-}
-
-fn add_path_data(b: &mut PathBuilder, d: &str) {
-    let mut n = Nums { s: d.as_bytes(), i: 0 };
-    let (mut cur, mut start, mut last_ctrl) = (v(0.0, 0.0), v(0.0, 0.0), None::<Vector2>);
-    let mut cmd = b'M';
-    loop {
-        n.skip();
-        if n.i >= n.s.len() {
-            break;
-        }
-        let c = n.s[n.i];
-        if c == b'|' {
-            // A new <path> element: its first moveto is relative to the origin, not to where
-            // the previous element ended.
-            cur = v(0.0, 0.0);
-            start = cur;
-            last_ctrl = None;
-            cmd = b'M';
-            n.i += 1;
-            continue;
-        }
-        if c.is_ascii_alphabetic() {
-            cmd = c;
-            n.i += 1;
-        } else if !n.more() {
-            n.i += 1;
-            continue;
-        }
-        let rel = cmd.is_ascii_lowercase();
-        let at = |x: f32, y: f32, cur: Vector2| if rel { v(cur.X + x, cur.Y + y) } else { v(x, y) };
-        // SAFETY (all sink calls below): the sink is open until `close`.
+    fn arc(&mut self, _from: Pt, to: Pt, rx: f32, ry: f32, rotation: f32, large: bool, sweep: bool) {
+        // SAFETY: the sink is open until `close`.
         unsafe {
-            match cmd.to_ascii_uppercase() {
-                b'M' => {
-                    let p = at(n.num(), n.num(), cur);
-                    b.begin(p);
-                    cur = p;
-                    start = p;
-                    cmd = if rel { b'l' } else { b'L' }; // further pairs are line-tos
-                    last_ctrl = None;
-                }
-                b'L' => {
-                    let p = at(n.num(), n.num(), cur);
-                    b.sink.AddLine(p);
-                    cur = p;
-                    last_ctrl = None;
-                }
-                b'H' => {
-                    let x = n.num();
-                    cur = v(if rel { cur.X + x } else { x }, cur.Y);
-                    b.sink.AddLine(cur);
-                    last_ctrl = None;
-                }
-                b'V' => {
-                    let y = n.num();
-                    cur = v(cur.X, if rel { cur.Y + y } else { y });
-                    b.sink.AddLine(cur);
-                    last_ctrl = None;
-                }
-                b'C' | b'S' => {
-                    let c1 = if cmd.eq_ignore_ascii_case(&b'C') {
-                        at(n.num(), n.num(), cur)
-                    } else {
-                        last_ctrl.map_or(cur, |lc| v(2.0 * cur.X - lc.X, 2.0 * cur.Y - lc.Y))
-                    };
-                    let c2 = at(n.num(), n.num(), cur);
-                    let p = at(n.num(), n.num(), cur);
-                    b.sink.AddBezier(&D2D1_BEZIER_SEGMENT { point1: c1, point2: c2, point3: p });
-                    last_ctrl = Some(c2);
-                    cur = p;
-                }
-                b'Q' => {
-                    let c1 = at(n.num(), n.num(), cur);
-                    let p = at(n.num(), n.num(), cur);
-                    b.sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT { point1: c1, point2: p });
-                    last_ctrl = Some(c1);
-                    cur = p;
-                }
-                b'A' => {
-                    let (rx, ry, rot) = (n.num(), n.num(), n.num());
-                    let (large, sweep) = (n.flag(), n.flag());
-                    let p = at(n.num(), n.num(), cur);
-                    b.sink.AddArc(&D2D1_ARC_SEGMENT {
-                        point: p,
-                        size: D2D_SIZE_F { width: rx, height: ry },
-                        rotationAngle: rot,
-                        sweepDirection: if sweep { D2D1_SWEEP_DIRECTION_CLOCKWISE } else { D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE },
-                        arcSize: if large { D2D1_ARC_SIZE_LARGE } else { D2D1_ARC_SIZE_SMALL },
-                    });
-                    cur = p;
-                    last_ctrl = None;
-                }
-                b'Z' => {
-                    b.end(true);
-                    cur = start;
-                    last_ctrl = None;
-                }
-                _ => {
-                    n.i += 1;
-                }
-            }
-        }
+            self.sink.AddArc(&D2D1_ARC_SEGMENT {
+                point: v(to.0, to.1),
+                size: D2D_SIZE_F { width: rx, height: ry },
+                rotationAngle: rotation,
+                sweepDirection: if sweep { D2D1_SWEEP_DIRECTION_CLOCKWISE } else { D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE },
+                arcSize: if large { D2D1_ARC_SIZE_LARGE } else { D2D1_ARC_SIZE_SMALL },
+            })
+        };
     }
-}
-
-/// Converts Lucide's SVG elements (`<path d>`, `<circle>`, `<rect>`, `<line>`, `<polyline>`,
-/// `<polygon>`) to path data.
-fn svg_to_path_data(svg: &str) -> String {
-    let attr = |tag: &str, name: &str| -> f32 {
-        let pat = format!(" {name}=\"");
-        tag.find(&pat).and_then(|i| tag[i + pat.len()..].split('"').next()).and_then(|v| v.parse().ok()).unwrap_or(0.0)
-    };
-    let mut d = String::new();
-    for tag in svg.split('<').filter(|t| !t.trim().is_empty()) {
-        let name = tag.split([' ', '/', '>']).next().unwrap_or("");
-        match name {
-            "path" => {
-                if let Some(i) = tag.find(" d=\"") {
-                    d.push_str("| ");
-                    d.push_str(tag[i + 4..].split('"').next().unwrap_or(""));
-                    d.push(' ');
-                }
-            }
-            "circle" => {
-                let (cx, cy, r) = (attr(tag, "cx"), attr(tag, "cy"), attr(tag, "r"));
-                d.push_str(&format!("M{} {} A{r} {r} 0 1 1 {} {} A{r} {r} 0 1 1 {} {} Z ", cx - r, cy, cx + r, cy, cx - r, cy));
-            }
-            "rect" => {
-                let (x, y, w, h) = (attr(tag, "x"), attr(tag, "y"), attr(tag, "width"), attr(tag, "height"));
-                let r = attr(tag, "rx").max(attr(tag, "ry")).min(w / 2.0).min(h / 2.0);
-                if r > 0.0 {
-                    d.push_str(&format!(
-                        "M{} {y} H{} A{r} {r} 0 0 1 {} {} V{} A{r} {r} 0 0 1 {} {} H{} A{r} {r} 0 0 1 {x} {} V{} A{r} {r} 0 0 1 {} {y} Z ",
-                        x + r, x + w - r, x + w, y + r, y + h - r, x + w - r, y + h, x + r, y + h - r, y + r, x + r
-                    ));
-                } else {
-                    d.push_str(&format!("M{x} {y} H{} V{} H{x} Z ", x + w, y + h));
-                }
-            }
-            "line" => d.push_str(&format!("M{} {} L{} {} ", attr(tag, "x1"), attr(tag, "y1"), attr(tag, "x2"), attr(tag, "y2"))),
-            "polyline" | "polygon" => {
-                if let Some(i) = tag.find(" points=\"") {
-                    let pts = tag[i + 9..].split('"').next().unwrap_or("");
-                    d.push('M');
-                    d.push_str(pts);
-                    if name == "polygon" {
-                        d.push_str(" Z");
-                    }
-                    d.push(' ');
-                }
-            }
-            _ => {}
-        }
-    }
-    d
 }
 
 // ---------- Renderer ----------
@@ -466,7 +172,6 @@ fn svg_to_path_data(svg: &str) -> String {
 type LayoutKey = (String, u32, u32, u32, u32, u8);
 
 pub struct Gfx {
-    hwnd: HWND,
     factory: ID2D1Factory1,
     dwrite: IDWriteFactory5,
     fonts: Option<IDWriteFontCollection>,
@@ -562,7 +267,6 @@ impl Gfx {
             let h = hwnd.0 as isize;
             std::thread::Builder::new().name("images".into()).spawn(move || decoder_thread(rx, tx, h)).map_err(|_| Error::from(E_FAIL))?;
             let mut g = Gfx {
-                hwnd,
                 factory,
                 dwrite,
                 fonts,
@@ -805,8 +509,7 @@ impl Gfx {
             let sink = geom.Open().ok()?;
             sink.SetFillMode(D2D1_FILL_MODE_WINDING);
             let mut b = PathBuilder { sink, open: false, filled };
-            let data = if svg.trim_start().starts_with('<') { svg_to_path_data(svg) } else { svg.to_owned() };
-            add_path_data(&mut b, &data);
+            walk_path(&icon_path_data(svg), &mut b);
             b.end(false);
             b.sink.Close().ok()?;
             geom
@@ -990,10 +693,6 @@ impl Gfx {
     pub fn fading(&self) -> bool {
         self.images.values().any(|s| matches!(s, Slot::Ready { ready_at, .. } if self.now - ready_at < 260.0))
     }
-
-    pub fn hwnd(&self) -> HWND {
-        self.hwnd
-    }
 }
 
 /// Loads Figtree (a WOFF2 variable font) into a DirectWrite font collection.
@@ -1015,34 +714,5 @@ fn load_font(dwrite: &IDWriteFactory5, woff2: &[u8]) -> Result<IDWriteFontCollec
         builder.AddFontFile(&file)?;
         let set = builder.CreateFontSet()?;
         dwrite.CreateFontCollectionFromFontSet(&set)?.cast()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn solid(b: u8, g: u8, r: u8) -> Vec<u8> {
-        [b, g, r, 255].repeat(24 * 24)
-    }
-
-    #[test]
-    fn tone_finds_the_hue_of_vivid_art() {
-        let (r, g, b) = tone(&solid(0, 0, 220), 24, 24).expect("red art has a tone").rgb8();
-        assert!(r > 200 && g < 90 && b < 90, "{r} {g} {b}");
-        let (r, g, b) = tone(&solid(200, 40, 20), 24, 24).expect("blue art has a tone").rgb8();
-        assert!(b > 200 && r < 120, "{r} {g} {b}");
-    }
-
-    #[test]
-    fn grey_art_has_no_tone() {
-        assert!(tone(&solid(120, 120, 120), 24, 24).is_none());
-        assert!(tone(&[], 0, 0).is_none());
-    }
-
-    #[test]
-    fn hsl_matches_the_electron_colours() {
-        assert_eq!(Color::parse("hsl(0 100% 50%)").map(Color::rgb8), Some((255, 0, 0)));
-        assert_eq!(Color::hsl(120.0, 1.0, 0.25).rgb8(), (0, 128, 0));
     }
 }

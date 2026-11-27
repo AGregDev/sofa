@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Sofa
+GenericName=Console home screen
+Comment=Your gaming PC as a console, from the couch
+Exec=sofa
+Icon=sofa
+Terminal=false
+Categories=Game;
+StartupWMClass=Sofa

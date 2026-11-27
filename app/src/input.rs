@@ -9,15 +9,24 @@
 //! The same thread writes the DualSense's lights (lightbar, player light, mute LED) when Sofa
 //! asks for a change: only on change, never per focus move (output reports on every move
 //! lagged Bluetooth pads in 1.x), and the lightbar only while Sofa is in front.
+//!
+//! On Linux every pad is read through evdev in XInput's place, and the DualSense through hidraw
+//! when it may be opened (`linux/pads.rs`); the reports and lights are the same.
 
 use std::sync::{Arc, Mutex};
+#[cfg(windows)]
 use windows::Win32::Devices::DeviceAndDriverInstallation::*;
+#[cfg(windows)]
 use windows::Win32::Devices::HumanInterfaceDevice::*;
+#[cfg(windows)]
 use windows::Win32::Foundation::*;
+#[cfg(windows)]
 use windows::Win32::Storage::FileSystem::*;
+#[cfg(windows)]
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+#[cfg(windows)]
 use windows::Win32::UI::Input::XboxController::*;
-use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+#[cfg(windows)]
 use windows::core::*;
 
 pub const WM_PAD_HOME: u32 = 0x8000 + 2; // WM_APP + 2: the Home button, from any app
@@ -121,9 +130,15 @@ pub struct Input {
     pad_active_at: f64,
     last_key_at: std::collections::HashMap<Action, f64>,
     last_pad_at: std::collections::HashMap<Action, f64>,
+    #[cfg(windows)]
     get_state_ex: Option<unsafe extern "system" fn(u32, *mut XINPUT_STATE) -> u32>,
+    #[cfg(windows)]
     xconnected: [bool; 4],
+    #[cfg(windows)]
     xprobe_at: f64,
+    /// The evdev pads (Linux), read by the `pads` thread.
+    #[cfg(target_os = "linux")]
+    ev: Arc<Mutex<crate::linux::pads::EvState>>,
     home_held: bool,
     /// Keys Sofa reads that are down in its window (a WM_KEYDOWN whose WM_KEYUP has not come).
     keys_down: Vec<u16>,
@@ -136,6 +151,7 @@ pub struct Input {
     lights: Arc<Mutex<Lights>>,
 }
 
+#[cfg(windows)]
 impl Input {
     /// `start` is the clock every timestamp is measured from (the UI's and the HID thread's).
     pub fn new(hwnd: HWND, start: std::time::Instant) -> Input {
@@ -172,39 +188,14 @@ impl Input {
         }
     }
 
-    /// Asks for the DualSense's lights; the controller's thread sends them if they changed.
-    pub fn set_lights(&self, l: Lights) {
-        if let Ok(mut g) = self.lights.lock() {
-            *g = l;
-        }
+    /// XInput pads are Xbox pads.
+    fn x_kind(&self) -> PadKind {
+        PadKind::Xbox
     }
 
-    pub fn set_layout(&mut self, layout: &str) {
-        self.layout = layout.to_owned();
-        match layout {
-            "xbox" | "nintendo" => self.kind = PadKind::Xbox,
-            "ps" => self.kind = PadKind::PlayStation,
-            _ => {}
-        }
-    }
-
-    pub fn layout(&self) -> &str {
-        &self.layout
-    }
-
-    /// A key press from the window: the action, unless the same press already came from a
-    /// pad (Steam's desktop layout turns the pad into keys, so each press can arrive twice).
-    pub fn key(&mut self, action: Action, now: f64) -> Option<Action> {
-        let i = BUTTONS.iter().position(|(_, a)| *a == action).unwrap_or(0);
-        // A DualSense button down right now: the key is that press, translated by another
-        // program (Steam's desktop layout sends Enter for ○), even before the loop polled it.
-        let (pad, info) = self.ds.lock().map(|g| *g).unwrap_or_default();
-        let pad_down = info.connected && now - pad.at < 1000.0 && pad.buttons.iter().any(|&b| b);
-        if pad_down || self.held[i] || now - self.pad_active_at < 400.0 || now - self.last_pad_at.get(&action).copied().unwrap_or(-1e9) < 250.0 {
-            return None;
-        }
-        self.last_key_at.insert(action, now);
-        Some(action)
+    /// XInput is polled: no press of its waits unseen.
+    fn other_down(&self, _now: f64) -> bool {
+        false
     }
 
     fn xinput(&mut self, now: f64) -> Option<Pad> {
@@ -263,6 +254,131 @@ impl Input {
         best
     }
 
+    pub fn info(&self) -> PadInfo {
+        self.ds.lock().map(|g| g.1).unwrap_or_default()
+    }
+
+    /// Whether an XInput pad is connected: XInput has no events, so only then does the UI
+    /// have to poll at 60 Hz. The DualSense wakes the UI itself (WM_PAD_INPUT).
+    pub fn xinput_active(&self) -> bool {
+        self.xconnected.iter().any(|&c| c)
+    }
+
+    /// Whether an Xbox (XInput) pad is connected right now, asked of XInput directly (before the
+    /// first poll `xinput_active` only assumes so).
+    pub fn xbox_now(&self) -> bool {
+        (0..4u32).any(|i| {
+            let mut st = XINPUT_STATE::default();
+            // SAFETY: writes into a local struct.
+            unsafe { XInputGetState(i, &mut st) == 0 }
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Input {
+    /// `start` is the clock every timestamp is measured from (the UI's and the pad threads').
+    pub fn new(start: std::time::Instant) -> Input {
+        use crate::linux::pads;
+        let ds = Arc::new(Mutex::new((Pad::default(), PadInfo::default())));
+        let lights = Arc::new(Mutex::new(Lights::default()));
+        let ev = Arc::new(Mutex::new(pads::EvState::default()));
+        let hid = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (shared, wanted, h) = (ds.clone(), lights.clone(), hid.clone());
+        let _ = std::thread::Builder::new().name("dualsense".into()).spawn(move || pads::dualsense_thread(shared, wanted, h, start));
+        let state = ev.clone();
+        let _ = std::thread::Builder::new().name("pads".into()).spawn(move || pads::evdev_thread(state, hid, start));
+        Input {
+            layout: "auto".into(),
+            kind: PadKind::PlayStation,
+            held: [false; 14],
+            next_repeat: [0.0; 14],
+            held_since: [0.0; 14],
+            pad_active_at: -1e9,
+            last_key_at: Default::default(),
+            last_pad_at: Default::default(),
+            ev,
+            home_held: false,
+            keys_down: Vec::new(),
+            x_down: false,
+            ps_home: true,
+            ds,
+            lights,
+        }
+    }
+
+    /// The kind of the evdev pad in use (a DualSense read without hidraw is a PlayStation pad).
+    fn x_kind(&self) -> PadKind {
+        self.ev.lock().ok().and_then(|g| g.kind).unwrap_or(PadKind::Xbox)
+    }
+
+    /// An evdev pad's button is down: a key arriving now is that press, made into a key by
+    /// another program (Steam's desktop layout), even before the loop polled it.
+    fn other_down(&self, now: f64) -> bool {
+        self.ev.lock().ok().and_then(|g| g.pad).is_some_and(|p| now - p.at < 1000.0 && p.buttons.iter().any(|&b| b))
+    }
+
+    /// The evdev pads, in XInput's place.
+    fn xinput(&mut self, _now: f64) -> Option<Pad> {
+        self.ev.lock().ok().and_then(|g| g.pad)
+    }
+
+    /// The DualSense over hidraw, else one read through evdev (its charge from the kernel).
+    pub fn info(&self) -> PadInfo {
+        let hid = self.ds.lock().map(|g| g.1).unwrap_or_default();
+        if hid.connected {
+            return hid;
+        }
+        self.ev.lock().ok().and_then(|g| g.sony).unwrap_or_default()
+    }
+
+    /// Whether an evdev pad is connected.
+    pub fn xinput_active(&self) -> bool {
+        self.ev.lock().is_ok_and(|g| g.count > 0)
+    }
+
+    /// Game Bar is Windows': nothing to offer for an Xbox pad here.
+    pub fn xbox_now(&self) -> bool {
+        false
+    }
+}
+
+impl Input {
+    /// Asks for the DualSense's lights; the controller's thread sends them if they changed.
+    pub fn set_lights(&self, l: Lights) {
+        if let Ok(mut g) = self.lights.lock() {
+            *g = l;
+        }
+    }
+
+    pub fn set_layout(&mut self, layout: &str) {
+        self.layout = layout.to_owned();
+        match layout {
+            "xbox" | "nintendo" => self.kind = PadKind::Xbox,
+            "ps" => self.kind = PadKind::PlayStation,
+            _ => {}
+        }
+    }
+
+    pub fn layout(&self) -> &str {
+        &self.layout
+    }
+
+    /// A key press from the window: the action, unless the same press already came from a
+    /// pad (Steam's desktop layout turns the pad into keys, so each press can arrive twice).
+    pub fn key(&mut self, action: Action, now: f64) -> Option<Action> {
+        let i = BUTTONS.iter().position(|(_, a)| *a == action).unwrap_or(0);
+        // A DualSense button down right now: the key is that press, translated by another
+        // program (Steam's desktop layout sends Enter for ○), even before the loop polled it.
+        let (pad, info) = self.ds.lock().map(|g| *g).unwrap_or_default();
+        let pad_down = info.connected && now - pad.at < 1000.0 && pad.buttons.iter().any(|&b| b);
+        if pad_down || self.other_down(now) || self.held[i] || now - self.pad_active_at < 400.0 || now - self.last_pad_at.get(&action).copied().unwrap_or(-1e9) < 250.0 {
+            return None;
+        }
+        self.last_key_at.insert(action, now);
+        Some(action)
+    }
+
     /// Polls the pads and returns the actions to run, in order.
     pub fn poll(&mut self, now: f64, focused: bool) -> Vec<Action> {
         let ds = *self.ds.lock().unwrap_or_else(|e| e.into_inner());
@@ -272,7 +388,7 @@ impl Input {
         // The pad in use drives the UI; the DualSense over HID wins while it is active.
         let pad = match (hid, x) {
             (Some(h), Some(xp)) if xp.buttons.iter().any(|&b| b) && !h.buttons.iter().any(|&b| b) => {
-                self.auto_kind(PadKind::Xbox);
+                self.auto_kind(self.x_kind());
                 Some(xp)
             }
             (Some(h), _) => {
@@ -280,7 +396,7 @@ impl Input {
                 Some(h)
             }
             (None, Some(xp)) => {
-                self.auto_kind(PadKind::Xbox);
+                self.auto_kind(self.x_kind());
                 Some(xp)
             }
             _ => None,
@@ -401,34 +517,18 @@ impl Input {
         }
     }
 
-    pub fn info(&self) -> PadInfo {
-        self.ds.lock().map(|g| g.1).unwrap_or_default()
-    }
-
-    /// Whether an XInput pad is connected: XInput has no events, so only then does the UI
-    /// have to poll at 60 Hz. The DualSense wakes the UI itself (WM_PAD_INPUT).
-    pub fn xinput_active(&self) -> bool {
-        self.xconnected.iter().any(|&c| c)
-    }
-
-    /// Whether an Xbox (XInput) pad is connected right now, asked of XInput directly (before the
-    /// first poll `xinput_active` only assumes so).
-    pub fn xbox_now(&self) -> bool {
-        (0..4u32).any(|i| {
-            let mut st = XINPUT_STATE::default();
-            // SAFETY: writes into a local struct.
-            unsafe { XInputGetState(i, &mut st) == 0 }
-        })
-    }
 }
 
 // ---------- DualSense over HID ----------
 
+#[cfg(windows)]
 const SONY: u16 = 0x054c;
+#[cfg(windows)]
 const MODELS: [u16; 2] = [0x0ce6, 0x0df2]; // DualSense, DualSense Edge
 
 /// The first DualSense: its handle, whether it is on Bluetooth, and its input and output
 /// report lengths (Windows wants writes padded to the longest output report).
+#[cfg(windows)]
 fn find_dualsense() -> Option<(HANDLE, bool, usize, usize)> {
     // SAFETY: SetupAPI enumeration with buffers sized as the API reports; handles closed on
     // every path that does not return them.
@@ -529,21 +629,38 @@ pub(crate) fn output_report(l: &Lights, full: bool, fade: bool, bt: bool, seq: u
     r
 }
 
+/// A DualSense connection: its input reports, one per read, and its output reports.
+pub(crate) trait Hid {
+    fn read(&mut self, buf: &mut [u8]) -> Option<usize>;
+    fn write(&mut self, report: &[u8]) -> bool;
+}
+
+#[cfg(windows)]
+struct WinHid(HANDLE);
+
+#[cfg(windows)]
+impl Hid for WinHid {
+    fn read(&mut self, buf: &mut [u8]) -> Option<usize> {
+        let mut read = 0u32;
+        // SAFETY: blocking read into our buffer.
+        let ok = unsafe { ReadFile(self.0, Some(buf), Some(&mut read), None) }.is_ok();
+        (ok && read > 0).then_some(read as usize)
+    }
+    fn write(&mut self, report: &[u8]) -> bool {
+        let mut wrote = 0u32;
+        // SAFETY: a synchronous write of our own buffer; no read is pending on this handle
+        // (this thread does both, one after the other).
+        unsafe { WriteFile(self.0, Some(report), Some(&mut wrote), None) }.is_ok()
+    }
+}
+
+#[cfg(windows)]
 fn dualsense_thread(shared: Arc<Mutex<(Pad, PadInfo)>>, wanted: Arc<Mutex<Lights>>, hwnd: isize, start: std::time::Instant) {
-    let now = || start.elapsed().as_secs_f64() * 1000.0;
-    let post = |msg: u32, w: usize| {
-        // SAFETY: posting to our window; a closed window drops it.
-        unsafe {
-            let _ = PostMessageW(Some(HWND(hwnd as *mut _)), msg, WPARAM(w), LPARAM(0));
-        }
-    };
     loop {
         let Some((h, bt, len, out_len)) = find_dualsense() else {
             std::thread::sleep(std::time::Duration::from_secs(3));
             continue;
         };
-        // What the controller shows, as last sent on this connection.
-        let (mut sent, mut faded, mut seq, mut retry_at) = (None::<Lights>, false, 0u8, 0.0f64);
         if bt {
             // Reading the calibration report switches a Bluetooth DualSense to full reports.
             let mut feature = [0u8; 41];
@@ -551,100 +668,103 @@ fn dualsense_thread(shared: Arc<Mutex<(Pad, PadInfo)>>, wanted: Arc<Mutex<Lights
             // SAFETY: the buffer is the feature report's size.
             let _ = unsafe { HidD_GetFeature(h, feature.as_mut_ptr().cast(), feature.len() as u32) };
         }
-        let mut buf = vec![0u8; len.max(78)];
-        let (mut ps_held, mut combo_held, mut mute_held, mut last_sig) = (false, false, false, 0u32);
-        loop {
-            let mut read = 0u32;
-            // SAFETY: blocking read into our buffer.
-            let ok = unsafe { ReadFile(h, Some(&mut buf[..len.max(1)]), Some(&mut read), None) }.is_ok();
-            if !ok || read == 0 {
-                break;
-            }
-            let base = match buf[0] {
-                0x31 => 2,                       // Bluetooth, full mode
-                0x01 if !bt && read >= 64 => 1,  // USB
-                _ => continue,                   // Bluetooth basic mode: switching
-            };
-            let v = &buf[base..];
-            let (b0, b1, b2) = (v[7], v[8], v[9]);
-            let hat = b0 & 0x0f;
-            let mut p = Pad { at: now(), ..Pad::default() };
-            let on = [
-                b0 & 0x20 != 0, // cross
-                b0 & 0x40 != 0, // circle
-                b0 & 0x10 != 0, // square
-                b0 & 0x80 != 0, // triangle
-                b1 & 0x01 != 0,
-                b1 & 0x02 != 0,
-                b1 & 0x04 != 0,
-                b1 & 0x08 != 0,
-                b1 & 0x10 != 0, // create
-                b1 & 0x20 != 0, // options
-                b1 & 0x40 != 0,
-                b1 & 0x80 != 0,
-                hat == 7 || hat == 0 || hat == 1,
-                (3..=5).contains(&hat),
-                (5..=7).contains(&hat),
-                (1..=3).contains(&hat),
-                b2 & 0x01 != 0, // PS
-                b2 & 0x02 != 0, // touchpad
-            ];
-            p.buttons = on;
-            p.axes = [(f32::from(v[0]) - 128.0) / 128.0, (f32::from(v[1]) - 128.0) / 128.0, (f32::from(v[2]) - 128.0) / 128.0, (f32::from(v[3]) - 128.0) / 128.0];
-            let status = v[52];
-            let info = PadInfo { connected: true, battery: Some(((status & 0x0f) * 10 + 5).min(100)), charging: matches!(status >> 4, 1 | 2) };
-            if let Ok(mut g) = shared.lock() {
-                *g = (p, info);
-            }
-            // Reports arrive hundreds of times a second (motion sensors); the UI only wakes
-            // when a button or a stick direction actually changed.
-            let mut sig = on.iter().enumerate().fold(0u32, |s, (i, &b)| s | (u32::from(b) << i));
-            for (i, a) in p.axes[..2].iter().enumerate() {
-                sig |= (u32::from(*a < -0.55) << (20 + 2 * i)) | (u32::from(*a > 0.55) << (21 + 2 * i));
-            }
-            if sig != last_sig {
-                last_sig = sig;
-                post(WM_PAD_INPUT, 0);
-            }
-            // The PS button (or Create + Options) reaches Sofa even while a game has focus.
-            let combo = on[8] && on[9];
-            if (on[16] && !ps_held) || (combo && !combo_held) {
-                post(WM_PAD_HOME, usize::from(!(on[16] && !ps_held)));
-            }
-            ps_held = on[16];
-            combo_held = combo;
-            // The mute button, like on a PS5: Sofa mutes the microphone from any app.
-            let mute = b2 & 0x04 != 0;
-            if mute && !mute_held {
-                post(WM_PAD_MUTE, 0);
-            }
-            mute_held = mute;
-            // Lights: written here, between reads, only when what Sofa wants changed.
-            let want = wanted.lock().map(|g| *g).unwrap_or_default();
-            let full = want.armed && want.front && sent != Some(want);
-            let led = want.armed && !want.front && sent.is_none_or(|s| s.mute != want.mute);
-            let t = now();
-            if (full || led) && t >= retry_at {
-                let report = output_report(&want, full, full && !faded, bt, seq, out_len);
-                seq = seq.wrapping_add(1);
-                let mut wrote = 0u32;
-                // SAFETY: a synchronous write of our own buffer; no read is pending on this
-                // handle (this thread does both, one after the other).
-                if unsafe { WriteFile(h, Some(&report), Some(&mut wrote), None) }.is_ok() {
-                    faded |= full;
-                    // Behind a game only the LED changed; the lightbar is the game's.
-                    sent = Some(if full { want } else { Lights { front: false, mute: want.mute, ..sent.unwrap_or(want) } });
-                } else {
-                    retry_at = t + 2000.0;
-                }
-            }
-        }
+        dualsense_session(&mut WinHid(h), bt, len, out_len, &shared, &wanted, hwnd, start);
         // SAFETY: closing the handle this loop opened.
         unsafe {
             let _ = CloseHandle(h);
         }
         if let Ok(mut g) = shared.lock() {
             g.1 = PadInfo::default();
+        }
+    }
+}
+
+/// One DualSense connection until it ends: its buttons, sticks and battery into `shared`, the
+/// PS and mute buttons posted to Sofa's window, and the lights Sofa wants written between reads.
+/// `len` is the input report length (`out_len`, the output report length to pad writes to).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dualsense_session(dev: &mut impl Hid, bt: bool, len: usize, out_len: usize, shared: &Arc<Mutex<(Pad, PadInfo)>>, wanted: &Arc<Mutex<Lights>>, hwnd: isize, start: std::time::Instant) {
+    let now = || start.elapsed().as_secs_f64() * 1000.0;
+    let post = |msg: u32, w: usize| crate::post(hwnd, msg, w);
+    // What the controller shows, as last sent on this connection.
+    let (mut sent, mut faded, mut seq, mut retry_at) = (None::<Lights>, false, 0u8, 0.0f64);
+    let mut buf = vec![0u8; len.max(78)];
+    let (mut ps_held, mut combo_held, mut mute_held, mut last_sig) = (false, false, false, 0u32);
+    while let Some(read) = dev.read(&mut buf[..len.max(1)]) {
+        let base = match buf[0] {
+            0x31 => 2,                       // Bluetooth, full mode
+            0x01 if !bt && read >= 64 => 1,  // USB
+            _ => continue,                   // Bluetooth basic mode: switching
+        };
+        let v = &buf[base..];
+        let (b0, b1, b2) = (v[7], v[8], v[9]);
+        let hat = b0 & 0x0f;
+        let mut p = Pad { at: now(), ..Pad::default() };
+        let on = [
+            b0 & 0x20 != 0, // cross
+            b0 & 0x40 != 0, // circle
+            b0 & 0x10 != 0, // square
+            b0 & 0x80 != 0, // triangle
+            b1 & 0x01 != 0,
+            b1 & 0x02 != 0,
+            b1 & 0x04 != 0,
+            b1 & 0x08 != 0,
+            b1 & 0x10 != 0, // create
+            b1 & 0x20 != 0, // options
+            b1 & 0x40 != 0,
+            b1 & 0x80 != 0,
+            hat == 7 || hat == 0 || hat == 1,
+            (3..=5).contains(&hat),
+            (5..=7).contains(&hat),
+            (1..=3).contains(&hat),
+            b2 & 0x01 != 0, // PS
+            b2 & 0x02 != 0, // touchpad
+        ];
+        p.buttons = on;
+        p.axes = [(f32::from(v[0]) - 128.0) / 128.0, (f32::from(v[1]) - 128.0) / 128.0, (f32::from(v[2]) - 128.0) / 128.0, (f32::from(v[3]) - 128.0) / 128.0];
+        let status = v[52];
+        let info = PadInfo { connected: true, battery: Some(((status & 0x0f) * 10 + 5).min(100)), charging: matches!(status >> 4, 1 | 2) };
+        if let Ok(mut g) = shared.lock() {
+            *g = (p, info);
+        }
+        // Reports arrive hundreds of times a second (motion sensors); the UI only wakes
+        // when a button or a stick direction actually changed.
+        let mut sig = on.iter().enumerate().fold(0u32, |s, (i, &b)| s | (u32::from(b) << i));
+        for (i, a) in p.axes[..2].iter().enumerate() {
+            sig |= (u32::from(*a < -0.55) << (20 + 2 * i)) | (u32::from(*a > 0.55) << (21 + 2 * i));
+        }
+        if sig != last_sig {
+            last_sig = sig;
+            post(WM_PAD_INPUT, 0);
+        }
+        // The PS button (or Create + Options) reaches Sofa even while a game has focus.
+        let combo = on[8] && on[9];
+        if (on[16] && !ps_held) || (combo && !combo_held) {
+            post(WM_PAD_HOME, usize::from(!(on[16] && !ps_held)));
+        }
+        ps_held = on[16];
+        combo_held = combo;
+        // The mute button, like on a PS5: Sofa mutes the microphone from any app.
+        let mute = b2 & 0x04 != 0;
+        if mute && !mute_held {
+            post(WM_PAD_MUTE, 0);
+        }
+        mute_held = mute;
+        // Lights: written here, between reads, only when what Sofa wants changed.
+        let want = wanted.lock().map(|g| *g).unwrap_or_default();
+        let full = want.armed && want.front && sent != Some(want);
+        let led = want.armed && !want.front && sent.is_none_or(|s| s.mute != want.mute);
+        let t = now();
+        if (full || led) && t >= retry_at {
+            let report = output_report(&want, full, full && !faded, bt, seq, out_len);
+            seq = seq.wrapping_add(1);
+            if dev.write(&report) {
+                faded |= full;
+                // Behind a game only the LED changed; the lightbar is the game's.
+                sent = Some(if full { want } else { Lights { front: false, mute: want.mute, ..sent.unwrap_or(want) } });
+            } else {
+                retry_at = t + 2000.0;
+            }
         }
     }
 }

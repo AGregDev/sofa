@@ -4,21 +4,30 @@ version = "2.2.2"
 edition = "2024"
 rust-version = "1.97"
 publish = false
-description = "Sofa, native: a controller-first home screen that turns a Windows gaming PC into a console"
+description = "Sofa, native: a controller-first home screen that turns a gaming PC on the TV into a console (Windows and Linux)"
 license = "MIT"
 
 [[bin]]
 name = "sofa"
 path = "src/main.rs"
 
+[features]
+# HTTPS on Linux (Discord sign-in, Spotify). Windows always uses WinHTTP. Off only to type-check
+# the Linux build from Windows, where `ring` (rustls' cryptography) cannot be compiled:
+# `cargo check --target x86_64-unknown-linux-gnu --no-default-features`.
+default = ["https"]
+https = ["dep:ureq"]
+
 [dependencies]
 serde_json = { version = "1", features = ["preserve_order"] }
 regex = { version = "1", default-features = false, features = ["std", "unicode-case", "unicode-perl"] }
 vdf = { path = "../crates/vdf" }
 steam = { path = "../crates/steam" }
+
+[target.'cfg(windows)'.dependencies]
 windows-numerics = "0.3"
 
-[dependencies.windows]
+[target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
 features = [
   "Win32_Foundation",
@@ -68,6 +77,23 @@ features = [
   "Win32_Security_Cryptography",
   "Win32_System_Pipes",
 ]
+
+# Linux: an X11 window (also under XWayland), drawn on the CPU. Everything here is Rust or loaded
+# at run time (libX11, libxkbcommon, libpulse-simple), so the AppImage needs no other libraries.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+winit = { version = "0.30", default-features = false, features = ["x11", "rwh_06"] }
+softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen"] }
+tiny-skia = "0.12"
+resvg = { version = "0.50", default-features = false }
+swash = "0.2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+x11rb = { version = "0.13", features = ["xtest"] }
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+memmap2 = "0.9"
+aes-gcm = "0.10"
+sha2 = "0.10"
+ureq = { version = "3", optional = true }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

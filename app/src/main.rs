@@ -1,67 +1,124 @@
-//! Sofa: one Windows executable, no web engine (docs/port/DECISIONS.md, ADR-001 and ADR-008).
-//! The window and its message loop. Sofa draws only while something moves; otherwise it
-//! sleeps until a message arrives (the DualSense thread posts one when a button changes;
-//! XInput pads are polled at 60 Hz while Sofa is in front).
+//! Sofa: one executable, no web engine (docs/port/DECISIONS.md, ADR-001, ADR-008 and ADR-010),
+//! for Windows and Linux. On Windows, this file is the window and its message loop; on Linux
+//! they are in `linux/app.rs`. Sofa draws only while something moves; otherwise it sleeps until
+//! a message arrives (the DualSense thread posts one when a button changes; XInput pads are
+//! polled at 60 Hz while Sofa is in front; evdev pads post their changes).
 //!
-//! The same file is the installer: named `Sofa-Setup-*.exe` it installs itself, and
-//! `Sofa.exe --uninstall` removes it (see `install.rs`).
+//! The same file is the installer: named `Sofa-Setup-*.exe` (or `Sofa-Setup-*.AppImage`) it
+//! installs itself, and `--uninstall` removes it (see `install.rs`, `linux/install.rs`).
 #![windows_subsystem = "windows"]
 
+#[cfg_attr(target_os = "linux", path = "linux/audio.rs")]
 mod audio;
+mod draw;
+#[cfg_attr(target_os = "linux", path = "linux/gfx.rs")]
 mod gfx;
 mod icons;
 mod input;
+#[cfg_attr(target_os = "linux", path = "linux/install.rs")]
 mod install;
 mod library;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg_attr(target_os = "linux", path = "linux/media.rs")]
 mod media;
+#[cfg_attr(target_os = "linux", path = "linux/platform.rs")]
 mod platform;
 mod shell;
 mod social;
 mod spotify;
 mod sound;
+#[cfg_attr(target_os = "linux", path = "linux/startmenu.rs")]
 mod startmenu;
 mod store;
 mod ui;
 mod view;
 
+#[cfg(windows)]
 use input::Action;
+#[cfg(windows)]
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Instant;
+#[cfg(windows)]
 use windows::Win32::Foundation::*;
+#[cfg(windows)]
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT};
+#[cfg(windows)]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+#[cfg(windows)]
 use windows::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+#[cfg(windows)]
 use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext};
+#[cfg(windows)]
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::*;
+#[cfg(windows)]
 use windows::core::*;
 
+/// Figtree: the WOFF2 for DirectWrite, the same font as TrueType for swash (Linux).
+#[cfg(windows)]
 const FONT: &[u8] = include_bytes!("../assets/fonts/figtree.woff2");
-const ICON_PNG: &[u8] = include_bytes!("../../assets/icon.png");
-const WELCOME_JPG: &[u8] = include_bytes!("../../assets/welcome.jpg");
+#[cfg(target_os = "linux")]
+pub(crate) const FONT: &[u8] = include_bytes!("../assets/fonts/figtree.ttf");
+pub(crate) const ICON_PNG: &[u8] = include_bytes!("../../assets/icon.png");
+pub(crate) const WELCOME_JPG: &[u8] = include_bytes!("../../assets/welcome.jpg");
 
 /// Another start of Sofa asks the running one to come forward.
-const WM_SHOW: u32 = 0x8000 + 7;
+pub(crate) const WM_SHOW: u32 = 0x8000 + 7;
 /// QA only: give memory back now, as after 15 s behind a game.
+#[cfg(windows)]
 const WM_QA_TRIM: u32 = 0x8000 + 9;
 /// QA only: the PS button was pressed in the window `wparam` (a stand-in for a game).
+#[cfg(windows)]
 const WM_QA_RUN: u32 = 0x8000 + 10;
 /// QA only: the sleep timer ends in a minute (its warning shows at once).
+#[cfg(windows)]
 const WM_QA_SLEEP: u32 = 0x8000 + 13;
 
 thread_local! {
+    pub(crate) static START: Instant = Instant::now();
+}
+
+#[cfg(windows)]
+thread_local! {
     static APP: RefCell<Option<ui::App>> = const { RefCell::new(None) };
-    static START: Instant = Instant::now();
     /// Window messages that arrived while the app was busy (a Win32 call inside an action
     /// sends messages back to this window); handled right after.
     static DEFERRED: RefCell<Vec<(u32, usize, isize)>> = const { RefCell::new(Vec::new()) };
 }
 
-static LOG: OnceLock<PathBuf> = OnceLock::new();
-static QA: OnceLock<bool> = OnceLock::new();
-static FULLSCREEN: OnceLock<bool> = OnceLock::new();
+pub(crate) static LOG: OnceLock<PathBuf> = OnceLock::new();
+pub(crate) static QA: OnceLock<bool> = OnceLock::new();
+pub(crate) static FULLSCREEN: OnceLock<bool> = OnceLock::new();
+
+/// Posts one of Sofa's messages (`WM_APP + n`) to its window, from any thread. On Linux the
+/// event loop gets it (`linux::app::post`).
+pub(crate) fn post(hwnd: isize, msg: u32, w: usize) {
+    #[cfg(windows)]
+    // SAFETY: posting to our window; a closed window drops it.
+    unsafe {
+        let _ = PostMessageW(Some(HWND(hwnd as *mut _)), msg, WPARAM(w), LPARAM(0));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = hwnd;
+        linux::app::post(msg, w);
+    }
+}
+
+/// Ends Sofa's loop (Quit Sofa).
+pub(crate) fn quit() {
+    #[cfg(windows)]
+    // SAFETY: posts WM_QUIT to this thread's queue.
+    unsafe {
+        PostQuitMessage(0)
+    };
+    #[cfg(target_os = "linux")]
+    linux::app::post(linux::app::WM_QUIT, 0);
+}
 
 /// A diagnostic log, only with `--log` (`%TEMP%\sofa-native.log`) or in a QA run.
 pub fn log(line: &str) {
@@ -75,18 +132,21 @@ pub fn log(line: &str) {
     }
 }
 
+#[cfg(windows)]
 fn qa() -> bool {
     QA.get().copied().unwrap_or(false)
 }
 
-fn now() -> f64 {
+pub(crate) fn now() -> f64 {
     START.with(|s| s.elapsed().as_secs_f64() * 1000.0)
 }
 
+#[cfg(windows)]
 fn with_app<R>(f: impl FnOnce(&mut ui::App) -> R) -> Option<R> {
     APP.with(|a| a.try_borrow_mut().ok().and_then(|mut g| g.as_mut().map(f)))
 }
 
+#[cfg(windows)]
 fn log_state(app: &ui::App) {
     if LOG.get().is_some() {
         log(&app.state_line());
@@ -95,6 +155,7 @@ fn log_state(app: &ui::App) {
 
 /// The keys Sofa reads as actions (also the keys held back from other programs while Sofa is
 /// in front, `platform::Hold::SofaKeys`).
+#[cfg(windows)]
 pub(crate) fn key_action(vk: VIRTUAL_KEY) -> Option<Action> {
     use input::Action::*;
     Some(match vk {
@@ -119,6 +180,7 @@ pub(crate) fn key_action(vk: VIRTUAL_KEY) -> Option<Action> {
 }
 
 /// The Home button, from a controller (`ps`: the PS button itself, which can be turned off).
+#[cfg(windows)]
 fn home_button(hwnd: HWND, ps: bool, t: f64) {
     with_app(|app| {
         if ps && !app.input.ps_home {
@@ -146,6 +208,7 @@ fn home_button(hwnd: HWND, ps: bool, t: f64) {
 /// other message goes to DefWindowProc as usual. (Answering 0 to all of them broke restoring:
 /// WM_QUERYOPEN answered 0 keeps a minimized window minimized, and WM_WINDOWPOSCHANGED never
 /// reaching DefWindowProc loses WM_SIZE.)
+#[cfg(windows)]
 fn ours(msg: u32) -> bool {
     matches!(
         msg,
@@ -175,6 +238,7 @@ fn ours(msg: u32) -> bool {
 }
 
 /// Handles the messages that need the app. When it is busy, the message waits in DEFERRED.
+#[cfg(windows)]
 fn handle(hwnd: HWND, msg: u32, w: usize, l: isize) -> Option<LRESULT> {
     if !ours(msg) {
         return None;
@@ -387,6 +451,7 @@ fn handle(hwnd: HWND, msg: u32, w: usize, l: isize) -> Option<LRESULT> {
     }
 }
 
+#[cfg(windows)]
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_PAINT => {
@@ -427,6 +492,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
+#[cfg(windows)]
 fn message_box(title: &str, text: &str, question: bool) -> bool {
     let flags = if question { MB_YESNO | MB_ICONQUESTION } else { MB_OK | MB_ICONERROR };
     // SAFETY: a modal message box with owned strings.
@@ -434,12 +500,18 @@ fn message_box(title: &str, text: &str, question: bool) -> bool {
 }
 
 /// `--size 1600x900`: a borderless window of that size (screenshots in the QA run).
-fn size_arg(args: &[String]) -> Option<(i32, i32)> {
+pub(crate) fn size_arg(args: &[String]) -> Option<(i32, i32)> {
     let i = args.iter().position(|a| a == "--size")?;
     let (w, h) = args.get(i + 1)?.split_once('x')?;
     Some((w.parse().ok()?, h.parse().ok()?))
 }
 
+#[cfg(target_os = "linux")]
+fn main() -> std::process::ExitCode {
+    linux::app::main()
+}
+
+#[cfg(windows)]
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let has = |f: &str| args.iter().any(|a| a == f);

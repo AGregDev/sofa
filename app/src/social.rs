@@ -2,7 +2,9 @@
 //! Discord only lets an app control voice for the people who made it, so each person uses a
 //! Discord application they made (its Client ID and Client Secret). The secret and the
 //! sign-in are kept encrypted for this Windows account (DPAPI); the ones Sofa 1.x saved
-//! (Electron's safeStorage) still open, so an upgrade keeps the sign-in (ADR-003).
+//! (Electron's safeStorage) still open, so an upgrade keeps the sign-in (ADR-003). On Linux the
+//! pipe is Discord's Unix socket and the secrets are sealed with a key only the person's account
+//! can read (`linux/secret.rs`).
 //!
 //! Everything that talks to Discord runs on the `discord` thread: the UI sends it a `Req`,
 //! reads the shared `Voice`, and is woken with `WM_SOCIAL` whenever that changed. Settings
@@ -13,8 +15,11 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+#[cfg(windows)]
 use windows::Win32::Foundation::*;
+#[cfg(windows)]
 use windows::Win32::Storage::FileSystem::*;
+#[cfg(windows)]
 use windows::core::*;
 
 /// Posted to Sofa's window when `Voice` changed.
@@ -260,10 +265,7 @@ impl Worker {
                 return;
             }
         }
-        // SAFETY: posting to Sofa's window; a closed window drops it.
-        unsafe {
-            let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(Some(HWND(self.hwnd as *mut _)), WM_SOCIAL, WPARAM(0), LPARAM(0));
-        }
+        crate::post(self.hwnd, WM_SOCIAL, 0);
     }
 
     fn save(&self) {
@@ -571,9 +573,15 @@ fn epoch_ms() -> f64 {
 
 // ---------- The pipe ----------
 
-/// Discord's RPC pipe (`\\.\pipe\discord-ipc-N`): frames of op (i32), length (i32), JSON.
+/// Discord's RPC pipe (`\\.\pipe\discord-ipc-N`; on Linux the Unix socket
+/// `$XDG_RUNTIME_DIR/discord-ipc-N`): frames of op (i32), length (i32), JSON.
+#[cfg(windows)]
 struct Pipe(HANDLE);
 
+#[cfg(target_os = "linux")]
+struct Pipe(std::os::unix::net::UnixStream);
+
+#[cfg(windows)]
 impl Drop for Pipe {
     fn drop(&mut self) {
         // SAFETY: closing the handle this pipe owns.
@@ -583,6 +591,7 @@ impl Drop for Pipe {
     }
 }
 
+#[cfg(windows)]
 impl Pipe {
     fn connect() -> Option<Pipe> {
         (0..10).find_map(|i| {
@@ -623,7 +632,54 @@ impl Pipe {
         }
         Some(out)
     }
+}
 
+#[cfg(target_os = "linux")]
+impl Pipe {
+    /// Discord's socket: in the runtime folder, or in its Flatpak's or Snap's.
+    fn connect() -> Option<Pipe> {
+        let run = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let dirs = [run.clone(), run.join("app/com.discordapp.Discord"), run.join("snap.discord"), run.join(".flatpak/com.discordapp.Discord/xdg-run"), std::env::temp_dir()];
+        dirs.iter().find_map(|d| (0..10).find_map(|i| std::os::unix::net::UnixStream::connect(d.join(format!("discord-ipc-{i}"))).ok().map(Pipe)))
+    }
+
+    fn send(&self, op: i32, v: &Value) -> bool {
+        use std::io::Write;
+        let body = v.to_string().into_bytes();
+        let mut buf = Vec::with_capacity(8 + body.len());
+        buf.extend(op.to_le_bytes());
+        buf.extend((body.len() as i32).to_le_bytes());
+        buf.extend(body);
+        (&self.0).write_all(&buf).is_ok()
+    }
+
+    /// Bytes waiting in the socket; Err when Discord closed it.
+    fn available(&self) -> std::result::Result<u32, ()> {
+        use std::os::fd::AsRawFd;
+        let mut p = libc::pollfd { fd: self.0.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+        // SAFETY: one pollfd on the stack for the call, no wait.
+        let r = unsafe { libc::poll(&mut p, 1, 0) };
+        if r < 0 || p.revents & (libc::POLLERR | libc::POLLNVAL) != 0 {
+            return Err(());
+        }
+        if p.revents & (libc::POLLIN | libc::POLLHUP) == 0 {
+            return Ok(0);
+        }
+        let mut n: libc::c_int = 0;
+        // SAFETY: FIONREAD writes the byte count into our local.
+        let ok = unsafe { libc::ioctl(self.0.as_raw_fd(), libc::FIONREAD, &mut n) } >= 0;
+        // Readable with nothing to read: the other end closed.
+        if !ok || n <= 0 { Err(()) } else { Ok(n as u32) }
+    }
+
+    fn read_exact(&self, n: usize) -> Option<Vec<u8>> {
+        use std::io::Read;
+        let mut out = vec![0u8; n];
+        (&self.0).read_exact(&mut out).ok().map(|_| out)
+    }
+}
+
+impl Pipe {
     /// The next frame within `wait` (None when none came); Err when the pipe closed.
     fn next(&self, wait: Duration) -> std::result::Result<Option<(i32, Value)>, ()> {
         let until = Instant::now() + wait;
@@ -651,8 +707,15 @@ fn https(method: &str, host: &str, path: &str, form: Option<&str>) -> std::resul
     request(method, host, path, headers, form.unwrap_or("").as_bytes()).map_err(|_| "No connection to Discord".to_owned())
 }
 
+/// One HTTPS request (`headers`: lines ending in CRLF): (status, body). Spotify uses it too.
+#[cfg(target_os = "linux")]
+pub(crate) fn request(method: &str, host: &str, path: &str, headers: &str, body: &[u8]) -> std::result::Result<(u32, Vec<u8>), String> {
+    crate::linux::net::request(method, host, path, headers, body)
+}
+
 /// One HTTPS request with WinHTTP (`headers`: lines ending in CRLF): (status, body). Spotify
 /// uses it too.
+#[cfg(windows)]
 pub(crate) fn request(method: &str, host: &str, path: &str, headers: &str, body: &[u8]) -> std::result::Result<(u32, Vec<u8>), String> {
     use windows::Win32::Networking::WinHttp::*;
     let offline = || format!("No connection to {host}");
@@ -719,13 +782,30 @@ pub(crate) fn url_encode(s: &str) -> String {
 
 // ---------- Secrets ----------
 
+/// A secret sealed with Sofa's key, which only this account can read: `aes:` + base64.
+#[cfg(target_os = "linux")]
+pub fn seal(s: &str) -> String {
+    crate::linux::secret::seal(s).unwrap_or_else(|| format!("raw:{s}"))
+}
+
+/// A secret saved by `seal`.
+#[cfg(target_os = "linux")]
+pub fn open(_data: &Path, s: &str) -> Option<String> {
+    if let Some(b) = s.strip_prefix("aes:") {
+        return crate::linux::secret::open(&b64_decode(b)?);
+    }
+    s.strip_prefix("raw:").map(str::to_owned)
+}
+
 /// A secret encrypted for this Windows account: `dpapi:` + base64.
+#[cfg(windows)]
 pub fn seal(s: &str) -> String {
     protect(s.as_bytes(), true).map_or_else(|| format!("raw:{s}"), |b| format!("dpapi:{}", b64_encode(&b)))
 }
 
 /// A secret saved by `seal`, or by Sofa 1.x (`enc:`: Electron's safeStorage, AES-GCM with a
 /// key kept in Sofa's `Local State`, itself protected for this Windows account).
+#[cfg(windows)]
 pub fn open(data: &Path, s: &str) -> Option<String> {
     if let Some(b) = s.strip_prefix("dpapi:") {
         return String::from_utf8(protect(&b64_decode(b)?, false)?).ok();
@@ -744,12 +824,14 @@ pub fn open(data: &Path, s: &str) -> Option<String> {
     String::from_utf8(aes_gcm_open(&key, nonce, ct, tag)?).ok()
 }
 
+#[cfg(windows)]
 fn electron_key(data: &Path) -> Option<Vec<u8>> {
     let v: Value = serde_json::from_str(&std::fs::read_to_string(data.join("Local State")).ok()?).ok()?;
     let k = b64_decode(v.pointer("/os_crypt/encrypted_key")?.as_str()?)?;
     protect(k.strip_prefix(b"DPAPI")?, false)
 }
 
+#[cfg(windows)]
 fn protect(input: &[u8], encrypt: bool) -> Option<Vec<u8>> {
     use windows::Win32::Security::Cryptography::*;
     let blob = CRYPT_INTEGER_BLOB { cbData: input.len() as u32, pbData: input.as_ptr().cast_mut() };
@@ -768,6 +850,7 @@ fn protect(input: &[u8], encrypt: bool) -> Option<Vec<u8>> {
     }
 }
 
+#[cfg(windows)]
 fn aes_gcm_open(key: &[u8], nonce: &[u8], ct: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
     use windows::Win32::Security::Cryptography::*;
     // SAFETY: CNG handles opened and closed here; every buffer outlives the calls using it.
@@ -854,7 +937,7 @@ mod tests {
     #[test]
     fn secrets_open_what_seal_wrote() {
         let sealed = seal("client-secret-123");
-        assert!(sealed.starts_with("dpapi:"));
+        assert!(sealed.starts_with(if cfg!(windows) { "dpapi:" } else { "aes:" }));
         assert_eq!(open(Path::new("."), &sealed).as_deref(), Some("client-secret-123"));
         assert_eq!(open(Path::new("."), "raw:plain").as_deref(), Some("plain"));
         assert_eq!(open(Path::new("."), "nonsense"), None);

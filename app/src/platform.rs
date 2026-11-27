@@ -150,6 +150,11 @@ pub fn focus(h: HWND) {
     }
 }
 
+/// `focus` for a window kept as a number (Running cards, the shell).
+pub fn focus_id(h: isize) {
+    focus(HWND(h as *mut _));
+}
+
 pub fn open(target: &str) -> bool {
     let t = HSTRING::from(target);
     // SAFETY: ShellExecute with valid strings.

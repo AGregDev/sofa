@@ -119,6 +119,13 @@ impl Store {
 }
 
 /// `%APPDATA%\sofa`, the folder Electron's `app.getPath('userData')` uses for Sofa.
+#[cfg(windows)]
 pub fn data_dir() -> PathBuf {
     std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_default().join("sofa")
+}
+
+/// `$XDG_CONFIG_HOME/sofa` (`~/.config/sofa`): the same `sofa.json` keys as on Windows.
+#[cfg(target_os = "linux")]
+pub fn data_dir() -> PathBuf {
+    crate::linux::config_home().join("sofa")
 }

@@ -31,6 +31,9 @@ pub(crate) const LINE: Color = Color(0.937, 0.914, 0.871, 0.08);
 /// Discord's own colour, for its tiles and the controller light on them.
 pub(crate) const DISCORD: Color = Color::hex(0x5865f2);
 
+/// The setting that starts Sofa with the computer.
+const START_WITH: &str = if cfg!(windows) { "Start Sofa with Windows" } else { "Start Sofa when you sign in" };
+
 /// Sleep timer lengths, in minutes: the quick menu steps through them, then off.
 const TIMER_STEPS: [u32; 4] = [30, 60, 90, 120];
 
@@ -46,7 +49,6 @@ static JOBS: AtomicUsize = AtomicUsize::new(0);
 /// listing and program icons (`startmenu.rs`). Windows' icon code loads many libraries; in a
 /// child they go away when it ends, instead of staying in Sofa's memory. Posts `done` after.
 fn spawn_scan(cache: &std::path::Path, jobs: &[(String, PathBuf)], startmenu: bool, hwnd: isize, done: u32) -> bool {
-    use std::os::windows::process::CommandExt;
     let Ok(exe) = std::env::current_exe() else { return false };
     let file = cache.join(format!("jobs-{}-{}.json", std::process::id(), JOBS.fetch_add(1, Ordering::Relaxed)));
     let list: Vec<Value> = jobs.iter().map(|(e, p)| Value::Array(vec![Value::from(e.as_str()), Value::from(p.to_string_lossy().as_ref())])).collect();
@@ -59,7 +61,22 @@ fn spawn_scan(cache: &std::path::Path, jobs: &[(String, PathBuf)], startmenu: bo
         cmd.arg("--no-startmenu");
     }
     // CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS: never in the way of a game.
-    cmd.creation_flags(0x0800_0000 | 0x0000_4000);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000 | 0x0000_4000);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: only nice(2), which is async-signal-safe, runs between fork and exec.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::nice(10);
+                Ok(())
+            });
+        }
+    }
     let Ok(mut child) = cmd.spawn() else {
         let _ = std::fs::remove_file(&file);
         return false;
@@ -1166,6 +1183,8 @@ impl App {
         let since = self.running.iter().find(|r| r.win.hwnd == w.hwnd).and_then(|r| r.since).or_else(|| shell::started(w.hwnd));
         self.running.retain(|r| r.win.hwnd != w.hwnd && (item.is_none() || r.item != item));
         let icon = (item.is_none() && !w.exe.is_empty()).then(|| library::icon_cache(&self.cache, std::path::Path::new(&w.exe)));
+        #[cfg(target_os = "linux")]
+        let icon = icon.map(|png| crate::linux::wm::running_icon(&w, png, self.qa));
         if let Some(png) = &icon
             && !png.exists()
             && !self.qa
@@ -1230,7 +1249,7 @@ impl App {
         crate::log(&format!("resume {h:#x} after {:.0} ms", now - at));
         if !self.qa && self.run_of(h).is_some() {
             self.shell.hand_off();
-            platform::focus(windows::Win32::Foundation::HWND(h as *mut _));
+            platform::focus_id(h);
         }
         crate::log(&self.state_line());
     }
@@ -1286,11 +1305,16 @@ impl App {
     /// The open window of a library item that has no Running card: an app's own program, or a
     /// program in a game's folder.
     fn window_of(&self, it: &Item) -> Option<isize> {
+        // A desktop entry: the window of the program it starts.
+        #[cfg(target_os = "linux")]
+        if let Launch::AppsFolder(id) = &it.launch {
+            return crate::linux::desktop::window_for(std::path::Path::new(id));
+        }
         if let Launch::AppsFolder(id) = &it.launch {
             let name = std::path::Path::new(id).file_name().map(|n| n.to_string_lossy().to_lowercase()).filter(|n| n.ends_with(".exe"))?;
             return shell::find_window(&name);
         }
-        let dir = format!("{}\\", it.install_path.as_ref()?);
+        let dir = format!("{}{}", it.install_path.as_ref()?, std::path::MAIN_SEPARATOR);
         shell::top_windows().into_iter().find(|&h| h != self.shell.sofa && shell::exe_of(shell::pid(h)).to_lowercase().starts_with(&dir))
     }
 
@@ -1328,7 +1352,7 @@ impl App {
             self.layers.push(Layer::Launch { item: i, at: now });
         } else {
             self.shell.set_top(self.focused);
-            self.toast(&format!("Couldn't open {}", it.name), "Windows didn't start it.");
+            self.toast(&format!("Couldn't open {}", it.name), if cfg!(windows) { "Windows didn't start it." } else { "It didn't start. Try it from the desktop." });
         }
     }
 
@@ -1377,10 +1401,7 @@ impl App {
         }
         self.shell.desktop = true;
         self.shell.hand_off();
-        // SAFETY: minimizing our own window.
-        unsafe {
-            let _ = windows::Win32::UI::WindowsAndMessaging::ShowWindow(self.gfx.hwnd(), windows::Win32::UI::WindowsAndMessaging::SW_MINIMIZE);
-        }
+        shell::minimize(self.shell.sofa);
     }
 
     // ---------- Layers ----------
@@ -1478,7 +1499,7 @@ impl App {
         let browser = platform::chosen_browser(self.store.text("browser")).map_or("None found", |b| b.name);
         let autostart = if self.qa { self.store.flag("launchAtLogin") } else { install::autostart() };
         let mut opts = vec![
-            Opt::new("Start Sofa with Windows", Act::Toggle("launchAtLogin")).switch(autostart),
+            Opt::new(START_WITH, Act::Toggle("launchAtLogin")).switch(autostart),
             Opt::new("Keep Sofa in front", Act::Toggle("keepInFront")).switch(self.store.flag("keepInFront")),
             Opt::new("Home button", Act::HomeButton).value(self.home_name()),
             Opt::new("Button layout", Act::Layout).value(self.layout_name()),
@@ -1516,7 +1537,7 @@ impl App {
 
     fn welcome_opts(&self) -> Vec<Opt> {
         let mut opts = vec![
-            Opt::new("Start Sofa with Windows", Act::Toggle("launchAtLogin")).switch(self.store.flag("launchAtLogin")),
+            Opt::new(START_WITH, Act::Toggle("launchAtLogin")).switch(self.store.flag("launchAtLogin")),
             Opt::new(format!("Keep Steam off the {}", self.guide_name()), Act::Toggle("steamGuide")).switch(self.store.flag("steamGuide")),
         ];
         if self.xbox && !self.qa {
@@ -1987,7 +2008,7 @@ impl App {
                     self.audio.current = Some(id);
                     self.audio_refresh();
                 } else {
-                    self.toast("Couldn't switch the sound", "Windows didn't accept that output. Try it in Windows' sound settings.");
+                    self.toast("Couldn't switch the sound", if cfg!(windows) { "Windows didn't accept that output. Try it in Windows' sound settings." } else { "The sound server didn't accept that output. Try it in the sound settings." });
                 }
             }
             Act::System(key) => {
@@ -2338,11 +2359,17 @@ impl App {
     }
 }
 
+#[cfg(windows)]
 pub(crate) fn clock_minute() -> u16 {
     use windows::Win32::System::SystemInformation::GetLocalTime;
     // SAFETY: plain call.
     let t = unsafe { GetLocalTime() };
     t.wHour * 60 + t.wMinute
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn clock_minute() -> u16 {
+    crate::linux::clock::minute_of_day()
 }
 
 impl App {
@@ -2365,19 +2392,38 @@ impl App {
     /// A controller action while the streaming window is in front: the remote's key
     /// (✕ select, ○ back, D-pad and stick move, □ play/pause, L2/R2 volume).
     pub fn remote_action(&mut self, a: Action) {
-        use windows::Win32::UI::Input::KeyboardAndMouse::*;
-        let vk = match a {
-            Action::Up => VK_UP,
-            Action::Down => VK_DOWN,
-            Action::Left => VK_LEFT,
-            Action::Right => VK_RIGHT,
-            Action::Accept => VK_RETURN,
-            Action::Back => VK_ESCAPE,
-            Action::Search => VK_MEDIA_PLAY_PAUSE,
-            Action::VolUp | Action::VolDown => return volume(a == Action::VolUp),
-            _ => return,
-        };
-        send_key(vk.0);
+        #[cfg(windows)]
+        {
+            use windows::Win32::UI::Input::KeyboardAndMouse::*;
+            let vk = match a {
+                Action::Up => VK_UP,
+                Action::Down => VK_DOWN,
+                Action::Left => VK_LEFT,
+                Action::Right => VK_RIGHT,
+                Action::Accept => VK_RETURN,
+                Action::Back => VK_ESCAPE,
+                Action::Search => VK_MEDIA_PLAY_PAUSE,
+                Action::VolUp | Action::VolDown => return volume(a == Action::VolUp),
+                _ => return,
+            };
+            send_key(vk.0);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // X11 keysyms: arrows, Return, Escape, XF86AudioPlay.
+            let sym = match a {
+                Action::Up => 0xff52,
+                Action::Down => 0xff54,
+                Action::Left => 0xff51,
+                Action::Right => 0xff53,
+                Action::Accept => 0xff0d,
+                Action::Back => 0xff1b,
+                Action::Search => 0x1008_ff14,
+                Action::VolUp | Action::VolDown => return volume(a == Action::VolUp),
+                _ => return,
+            };
+            crate::linux::x11::send_key(sym);
+        }
     }
 }
 
@@ -2431,11 +2477,11 @@ impl App {
             self.dc_authorizing = true;
             self.shell.hand_off();
             if let Some(h) = shell::find_window("discord.exe") {
-                platform::focus(windows::Win32::Foundation::HWND(h as *mut _));
+                platform::focus_id(h);
             }
         } else if !self.voice.authorizing && self.dc_authorizing {
             self.dc_authorizing = false;
-            platform::focus(windows::Win32::Foundation::HWND(self.shell.sofa as *mut _));
+            platform::focus_id(self.shell.sofa);
         }
         if self.dc.waiting && !self.voice.busy && !self.voice.authorizing {
             self.dc.waiting = false;
@@ -2921,7 +2967,7 @@ impl App {
             })
             .collect();
         let focus = self.audio.outputs.iter().position(|o| Some(&o.id) == current.as_ref()).unwrap_or(0);
-        opts.push(Opt::new("Windows sound settings", Act::System("sound")).icon("settings"));
+        opts.push(Opt::new(if cfg!(windows) { "Windows sound settings" } else { "Sound settings" }, Act::System("sound")).icon("settings"));
         sound::play(Sound::Open);
         self.layers.push(Layer::Sheet { title: "Sound output".into(), sub: "Games, videos and Sofa play here.".into(), opts, focus, kind: SheetKind::Sound });
     }
@@ -3146,7 +3192,7 @@ impl App {
             // Over a game or a film: Sofa comes forward, and Stay awake goes back to it.
             let came = self.shell.home_pressed(now);
             self.sleep_from = came.as_ref().map(|w| w.hwnd);
-            platform::focus(windows::Win32::Foundation::HWND(self.shell.sofa as *mut _));
+            platform::focus_id(self.shell.sofa);
             self.ps_home(came, now);
         } else {
             sound::play(Sound::Notice);
@@ -3261,7 +3307,7 @@ impl App {
             self.toast(&title, &body);
         }
         if come_back && !self.qa && !self.focused {
-            platform::focus(windows::Win32::Foundation::HWND(self.shell.sofa as *mut _));
+            platform::focus_id(self.shell.sofa);
         }
         let m = self.spotify.snapshot();
         if m == self.music {
@@ -3431,6 +3477,7 @@ fn is_sleep_warning(l: &Layer) -> bool {
 }
 
 /// A key press and release, as a remote (or keyboard) sends it, to the window in front.
+#[cfg(windows)]
 fn send_key(vk: u16) {
     use windows::Win32::UI::Input::KeyboardAndMouse::*;
     let extended = matches!(VIRTUAL_KEY(vk), VK_UP | VK_DOWN | VK_LEFT | VK_RIGHT | VK_MEDIA_PLAY_PAUSE);
@@ -3445,6 +3492,7 @@ fn send_key(vk: u16) {
     }
 }
 
+#[cfg(windows)]
 fn volume(up: bool) {
     use windows::Win32::UI::Input::KeyboardAndMouse::{KEYEVENTF_KEYUP, VK_VOLUME_DOWN, VK_VOLUME_UP, keybd_event};
     let k = if up { VK_VOLUME_UP } else { VK_VOLUME_DOWN };
@@ -3455,19 +3503,18 @@ fn volume(up: bool) {
     }
 }
 
+/// The media volume keys' step, on the default output.
+#[cfg(target_os = "linux")]
+fn volume(up: bool) {
+    if let Some((v, _)) = audio::volume() {
+        audio::set_volume(v + if up { 0.05 } else { -0.05 });
+    }
+}
+
 fn quit() {
-    // SAFETY: posts WM_QUIT to this thread's queue.
-    unsafe { windows::Win32::UI::WindowsAndMessaging::PostQuitMessage(0) };
+    crate::quit();
 }
 
 fn post(hwnd: isize, msg: u32, w: usize) {
-    // SAFETY: posting to our window; a closed window drops it.
-    unsafe {
-        let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
-            Some(windows::Win32::Foundation::HWND(hwnd as *mut _)),
-            msg,
-            windows::Win32::Foundation::WPARAM(w),
-            windows::Win32::Foundation::LPARAM(0),
-        );
-    }
+    crate::post(hwnd, msg, w);
 }

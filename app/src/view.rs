@@ -1368,7 +1368,7 @@ impl App {
 /// A System tile's line under its name. `press`: how to come back ("Press the PS button").
 fn system_desc(key: &str, press: &str) -> String {
     if key == "desktop" {
-        return format!("Shows the Windows desktop. {press} to come back");
+        return format!("Shows the {}desktop. {press} to come back", if cfg!(windows) { "Windows " } else { "" });
     }
     match key {
         "sleep" => "The PC sleeps until you wake it",
@@ -1376,7 +1376,8 @@ fn system_desc(key: &str, press: &str) -> String {
         "shutdown" => "Turns the PC off",
         "quit" => "Closes Sofa completely",
         "bigpicture" => "Opens Steam in Big Picture mode",
-        "settings" => "Start with Windows, buttons, browser and sounds",
+        "settings" if cfg!(windows) => "Start with Windows, buttons, browser and sounds",
+        "settings" => "Start when you sign in, buttons, browser and sounds",
         "rescan" => "Looks for newly installed games and apps",
         "display" => "Resolution, HDR and scaling",
         "sound" => "TV, headphones or the controller",
@@ -1428,6 +1429,7 @@ fn civil_from_days(z: i64) -> (i64, usize) {
 }
 
 /// Today's date in the person's own long format ("Friday, November 27, 2026").
+#[cfg(windows)]
 fn date_text() -> String {
     use windows::Win32::Globalization::{DATE_LONGDATE, GetDateFormatEx};
     let mut buf = [0u16; 128];
@@ -1437,6 +1439,7 @@ fn date_text() -> String {
 }
 
 /// The time `minutes` from now, in the person's own format ("11:42 PM").
+#[cfg(windows)]
 fn clock_in(minutes: u32) -> String {
     use windows::Win32::Globalization::{GetTimeFormatEx, TIME_NOSECONDS};
     use windows::Win32::System::SystemInformation::GetLocalTime;
@@ -1451,6 +1454,7 @@ fn clock_in(minutes: u32) -> String {
 }
 
 /// The time in the person's own format, without seconds.
+#[cfg(windows)]
 fn clock_text() -> String {
     use windows::Win32::Globalization::{GetTimeFormatEx, TIME_NOSECONDS};
     let mut buf = [0u16; 64];
@@ -1458,3 +1462,6 @@ fn clock_text() -> String {
     let n = unsafe { GetTimeFormatEx(windows::core::PCWSTR::null(), TIME_NOSECONDS, None, windows::core::PCWSTR::null(), Some(&mut buf)) };
     String::from_utf16_lossy(&buf[..(n.max(1) - 1) as usize])
 }
+
+#[cfg(target_os = "linux")]
+use crate::linux::clock::{clock_in, clock_text, date_text};
