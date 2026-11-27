@@ -36,6 +36,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File qa\qa.ps1   # automated QA, 
 | `app/src/input.rs` | keyboard, XInput (Guide via ordinal 100), DualSense over HID on its own thread, layouts, repeat, duplicate-press filter |
 | `app/src/shell.rs` | foreground events: topmost while home, the guard (desktop, taskbar, Start, Search), Steam push-down, full-screen sessions, Running windows |
 | `app/src/library.rs` | Steam (through `crates/vdf`), RecompLauncher, Start menu (from `cache\startmenu.json`), web and system tiles, `identify` |
+| `app/src/social.rs` | Discord voice: RPC pipe on the `discord` thread, OAuth over WinHTTP, secrets (DPAPI, and 1.x's safeStorage values) |
 | `app/src/startmenu.rs` | Start menu enumeration and 256 px icons; runs only in the `--scan` child process |
 | `app/src/platform.rs` | bring to front, launch, browsers and their TV profiles, power, processes, clipboard, working set |
 | `app/src/install.rs` | install, start with Windows, Start menu shortcut, Installed apps entry, uninstall, removing Sofa 1.x |
@@ -62,7 +63,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File qa\qa.ps1   # automated QA, 
   (`pending_rescan`); Running cards are keyed by window handle, never by position.
 - **Win32 calls inside an action can send messages back** (focus, minimize). `handle()`
   defers them while the app is borrowed; keep using `with_app` and never hold the app
-  across a call that pumps messages without that guard.
+  across a call that pumps messages without that guard. Only messages listed in `ours()`
+  are deferred; everything else must reach DefWindowProc (WM_QUERYOPEN answered 0 keeps a
+  minimized window minimized).
+- **Synthetic input** (SendInput, keybd_event) must carry `platform::SOFA_MARK` in
+  `dwExtraInfo`: while a streaming window Sofa opened is in front, unmarked synthetic input is
+  held back (Steam's desktop layout), and the PS button's Alt tap would be lost without it.
+  `cargo test --bin sofa -- --ignored` checks the hold (it sends F24 system-wide).
+- **Discord** runs only outside QA mode and only on its own thread; the UI reads `Voice` and
+  saves `social.discord` when the thread hands it over (same keys as 1.x).
 - **Memory is the point.** Decode art at the size it is drawn (`image_sized` with the
   focused size, so zooming never decodes twice), stay under the image budget, give memory
   back 15 s after a game takes the screen, and keep Windows' shell code (icons, Start menu)

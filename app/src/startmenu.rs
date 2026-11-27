@@ -42,11 +42,61 @@ pub fn save_icon(parsing_name: &str, out: &Path) -> bool {
     }
 }
 
+/// Saves a program's own icon (from its file, up to 256 px) as a PNG. Unlike the shell's
+/// image, this never turns into the generic file icon when the shell cannot read the file;
+/// a program without an icon gives no PNG, and Sofa draws its app glyph instead.
+pub fn save_exe_icon(exe: &str, out: &Path) -> bool {
+    if out.exists() {
+        return true;
+    }
+    if !exe.to_lowercase().ends_with(".exe") || !Path::new(exe).is_file() {
+        return false;
+    }
+    let wide: Vec<u16> = exe.encode_utf16().collect();
+    if wide.len() >= 260 {
+        return save_icon(exe, out);
+    }
+    let mut name = [0u16; 260];
+    name[..wide.len()].copy_from_slice(&wide);
+    if let Some(d) = out.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    // SAFETY: COM (initialized for this thread if it was not); the icon is destroyed after
+    // encoding.
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, HICON, PrivateExtractIconsW};
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let mut icons = [HICON::default()];
+        let n = PrivateExtractIconsW(&name, 0, 256, 256, Some(&mut icons), None, 0);
+        if n == 0 || n == u32::MAX || icons[0].is_invalid() {
+            return false;
+        }
+        let ok = (|| -> Result<()> {
+            let wic: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+            let bmp = wic.CreateBitmapFromHICON(icons[0])?;
+            write_png(&wic, &bmp, out)
+        })()
+        .is_ok();
+        let _ = DestroyIcon(icons[0]);
+        if !ok {
+            let _ = std::fs::remove_file(out);
+        }
+        ok
+    }
+}
+
 unsafe fn encode_png(hbm: windows::Win32::Graphics::Gdi::HBITMAP, out: &Path) -> Result<()> {
     // SAFETY: the caller owns `hbm`; WIC objects are created and released here.
     unsafe {
         let wic: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
         let bmp = wic.CreateBitmapFromHBITMAP(hbm, windows::Win32::Graphics::Gdi::HPALETTE::default(), WICBitmapUsePremultipliedAlpha)?;
+        write_png(&wic, &bmp, out)
+    }
+}
+
+unsafe fn write_png(wic: &IWICImagingFactory, bmp: &IWICBitmap, out: &Path) -> Result<()> {
+    // SAFETY: WIC objects are created and released here.
+    unsafe {
         let stream = wic.CreateStream()?;
         stream.InitializeFromFilename(&HSTRING::from(out.as_os_str()), GENERIC_WRITE_ACCESS)?;
         let encoder = wic.CreateEncoder(&GUID_ContainerFormatPng, std::ptr::null())?;
@@ -61,7 +111,7 @@ unsafe fn encode_png(hbm: windows::Win32::Graphics::Gdi::HBITMAP, out: &Path) ->
         frame.SetSize(w, h)?;
         let mut fmt = GUID_WICPixelFormat32bppBGRA;
         frame.SetPixelFormat(&mut fmt)?;
-        frame.WriteSource(&bmp, std::ptr::null())?;
+        frame.WriteSource(bmp, std::ptr::null())?;
         frame.Commit()?;
         encoder.Commit()
     }

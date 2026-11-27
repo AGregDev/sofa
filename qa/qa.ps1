@@ -170,8 +170,8 @@ Check 'H4 Home goes back to the first tile' ($s.focus -eq '0,0' -and $s.tab -eq 
 
 # ---------- Tabs ----------
 $tabs = @()
-for ($i = 0; $i -lt 5; $i++) { Key E 1 450; $tabs += (State).tab; if ((State).tab -eq 'games') { Shot '04-games' } ; if ((State).tab -eq 'system') { Shot '05-system' } }
-Check 'T1 R1 walks the tabs and wraps' (($tabs -join ',') -eq 'games,media,apps,system,home') ($tabs -join ',')
+for ($i = 0; $i -lt 6; $i++) { Key E 1 450; $tabs += (State).tab; if ((State).tab -eq 'games') { Shot '04-games' } ; if ((State).tab -eq 'social') { Shot '05-social' } ; if ((State).tab -eq 'system') { Shot '05-system' } }
+Check 'T1 R1 walks the tabs and wraps' (($tabs -join ',') -eq 'games,media,apps,social,system,home') ($tabs -join ',')
 Key Q
 Check 'T2 L1 goes back a tab' ((State).tab -eq 'system') (State).tab
 Key Esc

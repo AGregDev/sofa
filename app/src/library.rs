@@ -345,11 +345,12 @@ fn start_apps(cache: &Path) -> Vec<(String, String, Option<PathBuf>)> {
 
 // ---------- Streaming + system ----------
 
-pub const WEB: [(&str, &str, Option<&str>, bool, &str); 6] = [
+pub const WEB: [(&str, &str, Option<&str>, bool, &str); 7] = [
     ("youtube", "YouTube", Some("https://www.youtube.com/tv"), true, "#ff2d55"),
     ("netflix", "Netflix", Some("https://www.netflix.com"), false, "#e50914"),
     ("disney", "Disney+", Some("https://www.disneyplus.com"), false, "#1f5bff"),
     ("prime", "Prime Video", Some("https://www.primevideo.com"), false, "#00a8e1"),
+    ("crunchyroll", "Crunchyroll", Some("https://www.crunchyroll.com"), false, "#f47521"),
     ("twitch", "Twitch", Some("https://www.twitch.tv"), false, "#9146ff"),
     ("browser", "Browser", None, false, "#f0a24b"),
 ];
@@ -519,4 +520,53 @@ pub fn identify(items: &[Item], exe: &str) -> Option<usize> {
     // Last resort: the program is named like the app (discord.exe is Discord).
     let base: String = Path::new(&e).file_stem().map(|s| s.to_string_lossy().chars().filter(char::is_ascii_alphanumeric).collect()).unwrap_or_default();
     items.iter().position(|it| it.source == "start" && base.len() > 2 && it.name.to_lowercase().chars().filter(char::is_ascii_alphanumeric).collect::<String>() == base)
+}
+
+/// A Start menu app by the program's own name (its file description): Start menu entries
+/// that carry an app ID instead of a path (Firefox, Chrome) are found this way.
+pub fn identify_name(items: &[Item], app: &str) -> Option<usize> {
+    let norm = |s: &str| s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+    let a = norm(app);
+    if a.len() < 3 {
+        return None;
+    }
+    items.iter().position(|it| it.source == "start" && it.category != "hidden" && norm(&it.name) == a)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn start_item(name: &str, id: &str, category: &str) -> Item {
+        Item {
+            id: format!("start:{id}"),
+            name: name.into(),
+            source: "start",
+            category: category.into(),
+            launch: Launch::AppsFolder(id.into()),
+            art: Art::default(),
+            color: None,
+            glyph: None,
+            install_path: None,
+            icon_from: None,
+            project: None,
+            confirm: false,
+            favorite: false,
+            last_played: 0.0,
+        }
+    }
+
+    #[test]
+    fn running_apps_are_found_by_their_own_name() {
+        let items = vec![
+            start_item("Firefox Private Browsing", "308046B0AF4A39CB;PrivateBrowsingAUMID", "hidden"),
+            start_item("Firefox", "308046B0AF4A39CB", "apps"),
+            start_item("Google Chrome", "Chrome", "apps"),
+        ];
+        assert_eq!(identify_name(&items, "Firefox"), Some(1));
+        assert_eq!(identify_name(&items, "Google Chrome"), Some(2));
+        assert_eq!(identify_name(&items, "Firefox Private Browsing"), None, "hidden entries never name a card");
+        assert_eq!(identify_name(&items, "VS"), None, "too short to trust");
+        assert_eq!(identify_name(&items, ""), None);
+    }
 }

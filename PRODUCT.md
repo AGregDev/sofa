@@ -34,10 +34,12 @@ to start a game or switch apps.
    comes from the games' own art. No lag while moving, no flicker, no surprises,
    and no memory taken from the game you are playing.
 
-## Features (2.0)
+## Features (2.1)
 
-- Home rows: Running, Jump back in, Favorites, Games, Media, Apps (each long row
-  ends with an "All ..." tile).
+- Home rows: Running, Discord voice, Jump back in, Favorites, Games, Media, Apps
+  (each long row ends with an "All ..." tile).
+- Running cards name the program itself (Firefox, not the page it shows) with its
+  own icon; the page or document shows beside "Running" in the hero.
 - PS button home with the running app first; resume, close, force close; switch
   prompt when starting a second game.
 - Stays in front: the desktop, taskbar, Start menu and Search showing up bring
@@ -51,8 +53,16 @@ to start a game or switch apps.
   (confirm and back swapped). Home button: PS, or Create + Options.
 - Search with an on-screen keyboard (Shift, Space, Delete, Paste, Clear, Done) or a
   physical keyboard; rename with the same keyboard.
-- Streaming: YouTube in its TV interface, Netflix, Disney+, Prime Video and Twitch
-  full screen in Firefox, Chrome or Edge, each with Sofa's own browser profile.
+- Streaming: YouTube in its TV interface, Netflix, Disney+, Prime Video, Crunchyroll and Twitch
+  full screen in Edge, Chrome or Firefox (Automatic picks them in that order), each
+  with Sofa's own browser profile. Sofa's launch screen stays up until the service is
+  ready (no browser window opening), the page is sized for the screen (sharp on 1440p
+  and 4K), and the controller works YouTube's TV interface as its remote (other
+  programs' synthetic keys, such as Steam's desktop layout, are held back meanwhile). Tiles show
+  each service's own colour and mark.
+- Discord voice: your channel with Mute, Deafen and Leave, channels you joined
+  recently (on Home), your servers and their voice channels (Social tab), and a
+  one-time Connect walkthrough. A sign-in made in Sofa 1.x carries over.
 - First-run screen: start with Windows, keep Steam off the PS button, button layout.
 - Interface sounds, reduced motion, notices (controller connected, battery low,
   Steam fixed).
@@ -61,13 +71,11 @@ to start a game or switch apps.
 - Installs itself (one file, per user, no admin), replaces Sofa 1.x keeping its
   settings, and uninstalls from Windows' Installed apps.
 
-## Not yet in 2.0 (were in 1.x)
+## Not yet in 2.x (were in 1.x)
 
 These came with the Electron app and are planned for the native one. Each needs a
 native replacement for something the browser engine gave for free.
 
-- **Discord voice** (recent channels on Home, mute and deafen): needs Discord's local
-  RPC over its named pipe and the OAuth flow.
 - **Headphones in the controller take the sound**, and the sound output switcher:
   needs Windows' audio endpoint API (the policy config interface).
 - **DualSense lightbar, player light and mute LED**: needs HID output reports

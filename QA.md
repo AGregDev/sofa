@@ -30,7 +30,7 @@ writes `shots\qa.txt`. Exit code 0 means every check passed.
 | H2 | Right moves along the row |
 | H3 | Down moves to the next row |
 | H4 | Home goes back to the first tile |
-| T1 | R1 walks the tabs and wraps (Games, Media, Apps, System, Home) |
+| T1 | R1 walks the tabs and wraps (Games, Media, Apps, Social, System, Home) |
 | T2 | L1 goes back a tab |
 | T3 | Back returns to Home |
 | C1 | Options opens Settings |
@@ -122,8 +122,38 @@ These need a person, a TV and a controller.
 | M10 | With that setting on and Steam closed: starting Sofa turns it off and says so |
 | M11 | A game that exits on its own brings Sofa back with nothing in Running |
 | M12 | Sleep from System, wake the PC: Sofa is in front and draws |
+| M13 | YouTube: Sofa's launch screen, then YouTube's own screen, no browser window or "press Esc" bubble; D-pad, Cross and Circle move, select and go back, Square plays and pauses, with Steam running and without |
+| M14 | Discord: Home shows your channel with Mute, Deafen, Leave and recent channels; Mute flips at once and Discord agrees; a server's sheet joins a channel |
+| M15 | A Running card for a browser shows the browser's name and icon; the hero shows the page |
 
 ## Results
+
+### 2.1.0 (2026-11-27)
+
+- Automated UI run: 53 of 53 PASS (T1 now walks Social). Home: 66 MB working set, 86 MB private,
+  17 threads, 0.94 % idle CPU (an XInput pad was connected: 60 Hz polling); 17.5 MB after giving
+  memory back; first frame in 87 ms.
+- Unit tests and `cargo clippy --workspace --all-targets`: all PASS, no warnings.
+- D4 reproduced and fixed on the development PC with a scripted run (real app, not QA mode):
+  before, PS made Sofa the foreground window but left it minimized; after, it is restored and
+  in front. Cause: while busy, every window message was answered 0, WM_QUERYOPEN included.
+- D1 with Firefox in front: the card reads "Firefox" with Firefox's icon (was the page title
+  and a blank file icon).
+- YouTube, full screen at 3440 x 1440 with Chrome: launch screen, then YouTube's splash and
+  sign-in; PS brings Sofa back with a YouTube Running card. Chrome's kiosk mode (no "press Esc"
+  bubble) is not yet seen on screen: M13.
+- The controller in YouTube (first report: Cross did nothing): Steam's desktop layout sent arrows
+  and Space for the pad, and the first remote gave way to it entirely. Now Sofa holds back other
+  programs' synthetic input while YouTube's TV window is in front; the opt-in test
+  (`cargo test --bin sofa -- --ignored`) PASS: another program's key is stopped, Sofa's passes,
+  and keys pass again after.
+- Build, install: B1 to B3 PASS. `dist\Sofa-Setup-2.1.0.exe` (1.9 MB, version resource 2.1.0)
+  replaced the installed build: Installed apps shows 2.1.0, the Start menu shortcut and the
+  start-with-Windows entry point at the installed file, and Sofa started from it. B4 not rerun.
+- Manual checks M1 to M15: not walked for this release. An earlier build of it was tried on the
+  TV (YouTube, where Cross did nothing); the fix below was not tried on the TV before release.
+- Discord: with the sign-in Sofa 1.x saved, the Social tab lists the account's servers with
+  their icons and Home lists the recent channels. Joining, muting and the Connect flow: M14.
 
 ### 2.0.0
 

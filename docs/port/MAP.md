@@ -7,7 +7,8 @@ Since ADR-008 the native app is Sofa (2.0) and the Electron sources are gone fro
 
 Decisions: [DECISIONS.md](DECISIONS.md) (ADR-001 native UI, ADR-002 how each part is proven,
 ADR-003 keep settings and data, ADR-004 YouTube TV in the browser, ADR-005 superseded,
-ADR-006 no checkpoints, ADR-007 toolchain, ADR-008 native only). Terms:
+ADR-006 no checkpoints, ADR-007 toolchain, ADR-008 native only, ADR-009 streaming in Chromium
+under Sofa's launch screen). Terms:
 [GLOSSARY.md](GLOSSARY.md). Next: [HANDOFF.md](HANDOFF.md).
 
 ## Logic units
@@ -18,7 +19,7 @@ ADR-006 no checkpoints, ADR-007 toolchain, ADR-008 native only). Terms:
 | `src/steamguide.js` | `crates/steam` | done (by hand, ADR-008) | G1 to G15 in `crates/steam/tests/guide.rs` |
 | `src/library.js` | `app/src/library.rs` | done (by hand) | QA H1, L1; same `cache\` files |
 | `src/store.js` | `app/src/store.rs` | done (by hand), same keys and defaults | QA W4, C3 to C7, Q4 |
-| `src/social.js` | | not yet (Discord) | |
+| `src/social.js` | `app/src/social.rs` | done (by hand) | unit tests (secrets, base64, form encoding); read live against Discord with a 1.x sign-in |
 
 ## App
 
@@ -36,7 +37,8 @@ ADR-006 no checkpoints, ADR-007 toolchain, ADR-008 native only). Terms:
 | Staying in front, launcher guard, Steam push-down and fix | `main.js`, `padwatch.ps1`, `steamguide.js` | done |
 | Giving memory back in the background | (new) | done |
 | Native QA run and screenshots | `src/shots.js` | done (`qa/qa.ps1`) |
-| Discord voice (RPC pipe, OAuth, DPAPI secrets) | `src/social.js` | not yet |
+| Discord voice (RPC pipe, OAuth over WinHTTP, DPAPI secrets, 1.x secrets) | `src/social.js`, `app.js` | done |
+| Streaming launch cover, page zoom per screen, controller as YouTube's remote | (new, ADR-009) | done |
 | Sound output, mic mute, controller headphones | `audio.ps1`, `app.js` | not yet |
 | DualSense output: lightbar, player light, mute LED | `dualsense.js` | not yet |
 | Custom covers, uninstalling games and apps | `main.js`, `uninstall.ps1` | not yet |

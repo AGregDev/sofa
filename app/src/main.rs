@@ -14,6 +14,7 @@ mod install;
 mod library;
 mod platform;
 mod shell;
+mod social;
 mod sound;
 mod startmenu;
 mod store;
@@ -132,8 +133,38 @@ fn home_button(hwnd: HWND, ps: bool, t: f64) {
     });
 }
 
+/// The messages `handle` acts on. Only these wait in DEFERRED while the app is busy; every
+/// other message goes to DefWindowProc as usual. (Answering 0 to all of them broke restoring:
+/// WM_QUERYOPEN answered 0 keeps a minimized window minimized, and WM_WINDOWPOSCHANGED never
+/// reaching DefWindowProc loses WM_SIZE.)
+fn ours(msg: u32) -> bool {
+    matches!(
+        msg,
+        WM_KEYDOWN
+            | WM_SYSKEYDOWN
+            | WM_CHAR
+            | WM_SIZE
+            | WM_ACTIVATEAPP
+            | WM_DISPLAYCHANGE
+            | WM_HOTKEY
+            | WM_SHOW
+            | WM_QA_TRIM
+            | WM_QA_RUN
+            | gfx::WM_IMAGE
+            | input::WM_PAD_HOME
+            | input::WM_PAD_INPUT
+            | ui::WM_LIBRARY
+            | ui::WM_ICON
+            | ui::WM_STEAM
+            | social::WM_SOCIAL
+    )
+}
+
 /// Handles the messages that need the app. When it is busy, the message waits in DEFERRED.
 fn handle(hwnd: HWND, msg: u32, w: usize, l: isize) -> Option<LRESULT> {
+    if !ours(msg) {
+        return None;
+    }
     if APP.with(|a| a.try_borrow_mut().is_err()) {
         DEFERRED.with(|d| d.borrow_mut().push((msg, w, l)));
         return Some(LRESULT(0));
@@ -235,8 +266,12 @@ fn handle(hwnd: HWND, msg: u32, w: usize, l: isize) -> Option<LRESULT> {
             });
             Some(LRESULT(0))
         }
+        // A QA run takes input only from its own posted keys: someone using the controller
+        // during a run must not change its results.
         input::WM_PAD_HOME => {
-            home_button(hwnd, w == 0, t);
+            if !qa() {
+                home_button(hwnd, w == 0, t);
+            }
             Some(LRESULT(0))
         }
         // The DualSense's buttons changed: the loop wakes up and polls.
@@ -257,6 +292,13 @@ fn handle(hwnd: HWND, msg: u32, w: usize, l: isize) -> Option<LRESULT> {
         }
         ui::WM_STEAM => {
             with_app(|app| app.steam_result(w));
+            Some(LRESULT(0))
+        }
+        social::WM_SOCIAL => {
+            with_app(|app| {
+                app.social_changed(t);
+                log_state(app);
+            });
             Some(LRESULT(0))
         }
         WM_SHOW => {
@@ -364,7 +406,10 @@ fn main() -> Result<()> {
         if let Some(file) = args.iter().position(|a| a == "--jobs").and_then(|j| args.get(j + 1)).map(PathBuf::from) {
             let jobs: Vec<(String, String)> = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
             for (exe, png) in jobs {
-                startmenu::save_icon(&exe, std::path::Path::new(&png));
+                let png = std::path::Path::new(&png);
+                if !startmenu::save_exe_icon(&exe, png) && !exe.to_lowercase().ends_with(".exe") {
+                    startmenu::save_icon(&exe, png);
+                }
             }
             let _ = std::fs::remove_file(&file);
         }
@@ -518,11 +563,18 @@ fn main() -> Result<()> {
                         }
                         shell::Event::SteamGrab => app.steam_grab(),
                         shell::Event::Ended(h) => app.running_ended(h),
+                        shell::Event::Ready(h) => app.media_ready(h),
                     }
                 }
                 let mut home = false;
                 let focused = app.focused;
-                for a in app.input.poll(t, focused) {
+                // The streaming window Sofa opened is in front: the controller is its remote.
+                let remote = app.remote_active();
+                // Polled in a QA run too (it keeps track of connected pads), but a QA run takes
+                // input only from its own posted keys.
+                let pads = app.input.poll(t, focused || remote);
+                let qa_run = app.qa;
+                for a in pads.into_iter().filter(|_| !qa_run) {
                     if a == Action::Home {
                         home = true;
                     } else if focused {
@@ -531,13 +583,20 @@ fn main() -> Result<()> {
                         }
                         app.action(a, t);
                         log_state(app);
+                    } else if remote {
+                        app.remote_action(a);
                     }
                 }
+                // Only Sofa turns the controller into input while the streaming window is in
+                // front (Steam's desktop layout would press other keys for the same buttons).
+                platform::hold_synthetic_input(remote);
                 app.trim_if_idle(t);
                 let anim = app.animating(t);
-                let draw = visible && if focused || app.qa { anim } else { app.dirty };
+                // While Sofa's launch screen covers a starting browser, it keeps animating.
+                let live = focused || app.qa || app.shell.covering();
+                let draw = visible && if live { anim } else { app.dirty };
                 let busy = app.input.holding() || app.shell.busy();
-                let wait = match (focused || app.qa, app.input.xinput_active()) {
+                let wait = match (live || remote, app.input.xinput_active()) {
                     (true, true) => 16,
                     (true, false) => 250,
                     (false, true) => 50,

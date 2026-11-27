@@ -14,6 +14,90 @@ use windows::core::*;
 
 const DETACHED: u32 = 0x0000_0008 | 0x0000_0200; // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 
+/// Marks the keys and clicks Sofa itself synthesizes (`dwExtraInfo`), so `hold_synthetic_input`
+/// lets them through.
+pub const SOFA_MARK: usize = 0x50FA_50FA;
+
+// ---------- Holding back other programs' synthetic input ----------
+
+static HOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static HOOK_THREAD: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+const HOOK_ON: u32 = 0x8000 + 20;
+const HOOK_OFF: u32 = 0x8000 + 21;
+
+unsafe extern "system" fn key_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if code >= 0 && HOLD.load(std::sync::atomic::Ordering::Relaxed) {
+        // SAFETY: for WH_KEYBOARD_LL, lparam points to a KBDLLHOOKSTRUCT.
+        let k = unsafe { &*(l.0 as *const KBDLLHOOKSTRUCT) };
+        if k.flags.contains(LLKHF_INJECTED) && k.dwExtraInfo != SOFA_MARK {
+            return LRESULT(1);
+        }
+    }
+    // SAFETY: passing the event on.
+    unsafe { CallNextHookEx(None, code, w, l) }
+}
+
+unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if code >= 0 && HOLD.load(std::sync::atomic::Ordering::Relaxed) {
+        // SAFETY: for WH_MOUSE_LL, lparam points to a MSLLHOOKSTRUCT.
+        let m = unsafe { &*(l.0 as *const MSLLHOOKSTRUCT) };
+        if m.flags & LLMHF_INJECTED != 0 && m.dwExtraInfo != SOFA_MARK {
+            return LRESULT(1);
+        }
+    }
+    // SAFETY: passing the event on.
+    unsafe { CallNextHookEx(None, code, w, l) }
+}
+
+/// While a streaming window Sofa opened is in front, Sofa is the only thing turning the
+/// controller into input: keys and clicks other programs synthesize (Steam's desktop layout
+/// sends arrows, Space and clicks for the same buttons) are held back. The person's real
+/// keyboard and mouse always pass. The hooks live on their own thread, installed only while
+/// this is on.
+pub fn hold_synthetic_input(on: bool) {
+    use std::sync::atomic::Ordering::Relaxed;
+    if HOLD.swap(on, Relaxed) == on {
+        return;
+    }
+    let id = match HOOK_THREAD.get() {
+        Some(id) => *id,
+        None => {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let spawned = std::thread::Builder::new().name("inputhold".into()).spawn(move || {
+                let mut msg = MSG::default();
+                // SAFETY: creates this thread's message queue before its id is handed out;
+                // hooks are installed and removed on this thread only.
+                unsafe {
+                    let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+                    let _ = tx.send(GetCurrentThreadId());
+                    let module = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).ok().map(|m| HINSTANCE(m.0));
+                    let mut hooks: Vec<HHOOK> = Vec::new();
+                    while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                        match msg.message {
+                            HOOK_ON if hooks.is_empty() => {
+                                hooks.extend(SetWindowsHookExW(WH_KEYBOARD_LL, Some(key_hook), module, 0).ok());
+                                hooks.extend(SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), module, 0).ok());
+                            }
+                            HOOK_OFF => {
+                                for h in hooks.drain(..) {
+                                    let _ = UnhookWindowsHookEx(h);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            });
+            let Some(id) = spawned.ok().and_then(|_| rx.recv().ok()) else { return };
+            *HOOK_THREAD.get_or_init(|| id)
+        }
+    };
+    // SAFETY: posting to our own hook thread.
+    unsafe {
+        let _ = PostThreadMessageW(id, if on { HOOK_ON } else { HOOK_OFF }, WPARAM(0), LPARAM(0));
+    }
+}
+
 /// Brings a window to the front from the background (the PS button while a game runs).
 pub fn focus(h: HWND) {
     // SAFETY: Win32 calls on window handles; AttachThreadInput is undone before returning.
@@ -32,12 +116,17 @@ pub fn focus(h: HWND) {
         let fg_thread = GetWindowThreadProcessId(fg, None);
         let me = GetCurrentThreadId();
         // Tapping Alt lets a background process take the foreground.
-        keybd_event(VK_MENU.0 as u8, 0, Default::default(), 0);
-        keybd_event(VK_MENU.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_MENU.0 as u8, 0, Default::default(), SOFA_MARK);
+        keybd_event(VK_MENU.0 as u8, 0, KEYEVENTF_KEYUP, SOFA_MARK);
         let _ = AttachThreadInput(me, fg_thread, true);
         let _ = SetForegroundWindow(h);
         let _ = BringWindowToTop(h);
         let _ = AttachThreadInput(me, fg_thread, false);
+        // A minimized window can be the foreground window and still not show: restore it
+        // once more now that it may be activated.
+        if IsIconic(h).as_bool() {
+            let _ = ShowWindow(h, SW_RESTORE);
+        }
     }
 }
 
@@ -88,19 +177,22 @@ pub fn browsers() -> Vec<Browser> {
         pf86.as_ref().map(|p| p.join(r"Microsoft\Edge\Application\msedge.exe")),
         pf.as_ref().map(|p| p.join(r"Microsoft\Edge\Application\msedge.exe")),
     ]);
-    if let Some(e) = firefox {
-        out.push(Browser { key: "firefox", name: "Firefox", exe: e });
+    // Chromium browsers first: YouTube's TV interface is built for Chromium, Edge plays
+    // Netflix and Disney+ above 720p (PlayReady), and a second Firefox profile next to the
+    // person's own Firefox stops at "Firefox needs a quick restart" whenever an update waits.
+    if let Some(e) = edge {
+        out.push(Browser { key: "edge", name: "Edge", exe: e });
     }
     if let Some(e) = chrome {
         out.push(Browser { key: "chrome", name: "Chrome", exe: e });
     }
-    if let Some(e) = edge {
-        out.push(Browser { key: "edge", name: "Edge", exe: e });
+    if let Some(e) = firefox {
+        out.push(Browser { key: "firefox", name: "Firefox", exe: e });
     }
     out
 }
 
-/// The browser Sofa uses: the one picked in settings, else Firefox, Chrome, then Edge.
+/// The browser Sofa uses: the one picked in settings, else Edge, Chrome, then Firefox.
 pub fn chosen_browser(pick: &str) -> Option<Browser> {
     let mut all = browsers();
     let i = all.iter().position(|b| b.key == pick).unwrap_or(0);
@@ -108,6 +200,16 @@ pub fn chosen_browser(pick: &str) -> Option<Browser> {
 }
 
 const TV_UA: &str = "Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.5) AppleWebKit/537.36 (KHTML, like Gecko) 85.0.4183.93/6.5 TV Safari/537.36";
+
+/// The page zoom for the screen Sofa is on. TV interfaces get exactly 1080 CSS pixels of
+/// height (YouTube's TV layout then draws at the screen's own resolution: sharp on 1440p and
+/// 4K, not a smaller layout scaled up); other sites get 720, readable from the sofa.
+fn web_scale(tv: bool) -> f32 {
+    // SAFETY: plain query (Sofa is per-monitor DPI aware, so these are real pixels).
+    let h = unsafe { GetSystemMetrics(SM_CYSCREEN) }.max(720) as f32;
+    let s = h / if tv { 1080.0 } else { 720.0 };
+    (s.clamp(1.0, 4.0) * 1000.0).round() / 1000.0
+}
 
 /// Firefox profiles in Sofa's folder: full screen kiosk, no first-run pages, DRM on; the TV
 /// profile also reports a TV browser so YouTube shows its TV interface.
@@ -127,8 +229,9 @@ fn firefox_profile(data: &Path, tv: bool) -> PathBuf {
         ("full-screen-api.warning.timeout", "0"),
         ("browser.tabs.warnOnClose", "false"),
         ("browser.sessionstore.resume_from_crash", "false"),
-        ("layout.css.devPixelsPerPx", "\"1.5\""),
     ];
+    let scale = format!("\"{}\"", web_scale(tv));
+    prefs.push(("layout.css.devPixelsPerPx", &scale));
     let ua = format!("\"{TV_UA}\"");
     if tv {
         prefs.push(("general.useragent.override", &ua));
@@ -138,22 +241,37 @@ fn firefox_profile(data: &Path, tv: bool) -> PathBuf {
     dir
 }
 
-/// Opens a site full screen in the chosen browser, with Sofa's own TV profile.
-pub fn open_web(data: &Path, pick: &str, url: Option<&str>, tv: bool) -> bool {
-    let Some(b) = chosen_browser(pick) else { return open(url.unwrap_or("https://duckduckgo.com")) };
+/// Opens a site full screen in the chosen browser, with Sofa's own profile (a TV profile for
+/// YouTube). Returns whether it started, and the browser's program when Sofa started one
+/// itself (Sofa's launch screen covers the screen until that browser's window is ready).
+pub fn open_web(data: &Path, pick: &str, url: Option<&str>, tv: bool) -> (bool, Option<PathBuf>) {
+    let Some(b) = chosen_browser(pick) else { return (open(url.unwrap_or("https://duckduckgo.com")), None) };
     let mut c = Command::new(&b.exe);
     c.creation_flags(DETACHED);
     if b.key == "firefox" {
         c.arg("-profile").arg(firefox_profile(data, tv)).args(["-no-remote", "--kiosk", url.unwrap_or("about:home")]);
     } else {
-        c.arg(format!("--app={}", url.unwrap_or("https://www.google.com")))
-            .arg("--start-fullscreen")
-            .arg(format!("--user-data-dir={}", data.join(if tv { "browser-tv" } else { "browser" }).display()));
+        match url {
+            // Chrome's kiosk mode is full screen from its first frame, without the "press and
+            // hold Esc to exit full screen" bubble (an always-on-top popup that shows even over
+            // Sofa's launch screen). Edge's kiosk mode is always InPrivate, so sign-ins would
+            // not stay: Edge gets a full-screen app window instead.
+            Some(u) if b.key == "chrome" => c.args(["--kiosk", u]),
+            _ => c.arg(format!("--app={}", url.unwrap_or("https://www.google.com"))).arg("--start-fullscreen"),
+        };
+        c.arg("--window-position=0,0")
+            .arg(format!("--user-data-dir={}", data.join(if tv { "browser-tv" } else { "browser" }).display()))
+            .arg(format!("--force-device-scale-factor={}", web_scale(tv)))
+            .args(["--no-first-run", "--no-default-browser-check", "--hide-crash-restore-bubble", "--autoplay-policy=no-user-gesture-required"])
+            // Keep drawing while Sofa's launch screen covers the window, so it is ready
+            // the moment Sofa steps aside (no white or empty frame).
+            .args(["--disable-features=CalculateNativeWinOcclusion", "--disable-backgrounding-occluded-windows"]);
         if tv {
             c.arg(format!("--user-agent={TV_UA}"));
         }
     }
-    c.spawn().is_ok()
+    let ok = c.spawn().is_ok();
+    (ok, ok.then_some(b.exe))
 }
 
 // ---------- Processes, clipboard, memory ----------
@@ -239,7 +357,7 @@ pub fn user_active() {
         return;
     }
     LAST.store(now, Ordering::Relaxed);
-    let input = INPUT { r#type: INPUT_MOUSE, Anonymous: INPUT_0 { mi: MOUSEINPUT { dx: 0, dy: 0, mouseData: 0, dwFlags: MOUSEEVENTF_MOVE, time: 0, dwExtraInfo: 0 } } };
+    let input = INPUT { r#type: INPUT_MOUSE, Anonymous: INPUT_0 { mi: MOUSEINPUT { dx: 0, dy: 0, mouseData: 0, dwFlags: MOUSEEVENTF_MOVE, time: 0, dwExtraInfo: SOFA_MARK } } };
     // SAFETY: plain calls; the input array lives on the stack for the call. A zero-length
     // mouse move is the input the screen saver's idle timer listens to.
     unsafe {
@@ -259,4 +377,48 @@ pub fn sleep() {
 
 pub fn restart(shutdown: bool) {
     let _ = Command::new("shutdown.exe").args([if shutdown { "/s" } else { "/r" }, "/t", "0"]).creation_flags(0x0800_0000).spawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use windows::Win32::UI::Input::KeyboardAndMouse::*;
+
+    fn press(up: bool, mark: usize) {
+        let flags = if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) };
+        let i = INPUT { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VK_F24, wScan: 0, dwFlags: flags, time: 0, dwExtraInfo: mark } } };
+        // SAFETY: one input on the stack for the call.
+        unsafe { SendInput(&[i], std::mem::size_of::<INPUT>() as i32) };
+        std::thread::sleep(Duration::from_millis(80));
+    }
+
+    fn f24_down() -> bool {
+        // SAFETY: plain query.
+        let state = unsafe { GetAsyncKeyState(i32::from(VK_F24.0)) };
+        state < 0
+    }
+
+    /// Sends F24 (a key nothing uses) system-wide, so it runs only when asked:
+    /// `cargo test --bin sofa -- --ignored`.
+    #[test]
+    #[ignore]
+    fn held_input_stops_other_programs_keys_but_not_sofas() {
+        hold_synthetic_input(true);
+        std::thread::sleep(Duration::from_millis(300));
+        press(false, 0);
+        let others = f24_down();
+        press(true, 0);
+        press(false, SOFA_MARK);
+        let sofas = f24_down();
+        press(true, SOFA_MARK);
+        hold_synthetic_input(false);
+        std::thread::sleep(Duration::from_millis(300));
+        press(false, 0);
+        let released = f24_down();
+        press(true, 0);
+        assert!(!others, "another program's key got through while held");
+        assert!(sofas, "Sofa's own key was held back");
+        assert!(released, "keys stay held back after the hold ended");
+    }
 }

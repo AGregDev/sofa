@@ -10,6 +10,43 @@ use crate::ui::*;
 use std::path::PathBuf;
 
 const SCRIM: Color = Color(0.04, 0.035, 0.03, 0.62);
+/// Discord's own colour, for its tiles (as streaming services show theirs).
+const DISCORD: Color = Color::hex(0x5865f2);
+const WHITE: Color = Color::hex(0xffffff);
+
+/// A streaming service's own look, standing in for art: its colour and its mark, or its name
+/// as a wordmark where Sofa has no mark for it.
+#[derive(Clone, Copy)]
+struct WebLook {
+    bg: Color,
+    fg: Color,
+    mark: Option<&'static str>,
+}
+
+/// What ✕ does on a Discord tile, as the hints say it.
+fn soc_verb(s: &Soc) -> &'static str {
+    match s {
+        Soc::Join(_) => "Join",
+        Soc::Leave => "Leave",
+        Soc::Server(_) | Soc::Account | Soc::Open => "Open",
+        Soc::Here | Soc::Member(_) => "Who's here",
+        Soc::Setup => "Set up",
+        Soc::Mute | Soc::Deaf => "Switch",
+    }
+}
+
+fn web_look(id: &str) -> Option<WebLook> {
+    let white = Color::hex(0xffffff);
+    Some(match id {
+        "web:youtube" => WebLook { bg: Color::hex(0xff0033), fg: white, mark: Some("youtube") },
+        "web:netflix" => WebLook { bg: Color::hex(0x141414), fg: Color::hex(0xe50914), mark: Some("netflix") },
+        "web:twitch" => WebLook { bg: Color::hex(0x9146ff), fg: white, mark: Some("twitch") },
+        "web:crunchyroll" => WebLook { bg: Color::hex(0xf47521), fg: white, mark: Some("crunchyroll") },
+        "web:prime" => WebLook { bg: Color::hex(0x0f171e), fg: Color::hex(0x1a98ff), mark: None },
+        "web:disney" => WebLook { bg: Color::hex(0x0b1b46), fg: white, mark: None },
+        _ => return None,
+    })
+}
 
 /// What the hero shows for the focused tile.
 struct Hero {
@@ -18,8 +55,8 @@ struct Hero {
     icon: Option<PathBuf>,
     logo: Option<PathBuf>,
     name: String,
-    /// Streaming services: their name in their colour stands in for art.
-    web: Option<Color>,
+    /// Streaming services: their colour and mark stand in for art.
+    look: Option<WebLook>,
     glyph: Option<&'static str>,
     meta: String,
     verb: &'static str,
@@ -178,7 +215,7 @@ impl App {
             },
             "web" if it.id == "web:browser" => platform::chosen_browser(self.store.text("browser")).map_or("Browser".into(), |b| b.name.into()),
             "web" => match &it.launch {
-                Launch::Web { tv: true, .. } => "TV mode in your browser".into(),
+                Launch::Web { tv: true, .. } => format!("TV interface in {}", platform::chosen_browser(self.store.text("browser")).map_or("your browser", |b| b.name)),
                 _ => format!("Opens full screen in {}", platform::chosen_browser(self.store.text("browser")).map_or("your browser", |b| b.name)),
             },
             "system" => system_desc(it.glyph.unwrap_or("")).into(),
@@ -196,7 +233,10 @@ impl App {
         let it = &self.items[i];
         let running = self.item_running(i);
         let source = self.source_label(it);
-        let meta = if running {
+        let page = self.running.iter().find(|r| r.item == Some(i)).map(|r| self.run_page(r.win.hwnd)).unwrap_or_default();
+        let meta = if running && !page.is_empty() {
+            format!("Running  ·  {page}")
+        } else if running {
             format!("Running  ·  {source}")
         } else if it.last_played > 0.0 {
             format!("{source}  ·  {} {}", if it.category == "games" { "Played" } else { "Opened" }, ago(it.last_played))
@@ -209,7 +249,7 @@ impl App {
             icon: it.art.icon.clone(),
             logo: it.art.logo.clone(),
             name: it.name.clone(),
-            web: (it.source == "web").then(|| it.color.as_deref().and_then(Color::parse).unwrap_or(T1)),
+            look: web_look(&it.id),
             glyph: it.glyph,
             meta,
             verb: if running {
@@ -226,6 +266,23 @@ impl App {
     }
 
     fn hero_info(&self, id: &str) -> Option<Hero> {
+        if let Some(key) = id.strip_prefix("dc:") {
+            let soc = self.soc_by_key(key)?;
+            let verb = soc_verb(&soc);
+            let f = self.soc_face(&soc);
+            return Some(Hero {
+                hero: None,
+                capsule: None,
+                icon: f.image,
+                logo: None,
+                name: f.name,
+                look: f.brand.then_some(WebLook { bg: DISCORD, fg: WHITE, mark: Some("discord") }),
+                glyph: f.glyph,
+                meta: f.sub,
+                verb,
+                options: false,
+            });
+        }
         if let Some(h) = id.strip_prefix("run:").and_then(|h| h.parse::<isize>().ok()) {
             let run = self.run_of(h)?;
             if let Some(i) = run.item.filter(|&i| i < self.items.len()) {
@@ -237,9 +294,12 @@ impl App {
                 icon: run.icon.clone(),
                 logo: None,
                 name: self.run_name(h),
-                web: None,
+                look: None,
                 glyph: Some("app"),
-                meta: "Running".into(),
+                meta: match self.run_page(h) {
+                    p if p.is_empty() => "Running".into(),
+                    p => format!("Running  ·  {p}"),
+                },
                 verb: "Resume",
                 options: true,
             });
@@ -269,6 +329,20 @@ impl App {
             let zoom = 1.03 - 0.03 * if m > 0.0 { ease(((now - start) / 1200.0).clamp(0.0, 1.0)) as f32 } else { 1.0 };
             if let Some(art) = &hero.hero {
                 self.gfx.image_sized(art, Rect::new(0.0, 0.0, w, h).scaled(zoom), (w * 1.03, h * 1.03), Fit::CoverAt(0.3), 0.0, opacity);
+            } else if let Some(look) = hero.look {
+                // A streaming service: its colour fills the stage, its mark sits right of centre.
+                self.gfx.fill(Rect::new(0.0, 0.0, w, h), look.bg.alpha(0.6 * opacity), 0.0);
+                let cy = h / 2.0 + r;
+                match look.mark.and_then(icons::brand) {
+                    Some((n, path)) => {
+                        let s = 16.0 * r * zoom;
+                        self.gfx.icon(n, path, Rect::new(w - 12.0 * r - s, cy - s / 2.0, s, s), look.fg.alpha(opacity), true, 0.0);
+                    }
+                    None => {
+                        let tw = 40.0 * r;
+                        self.gfx.text(&hero.name, w - 12.0 * r - tw, cy - 4.5 * r, tw, 7.0 * r, 700, look.fg.alpha(opacity), Align::Right, 0, -0.03);
+                    }
+                }
             } else {
                 // The icon stage: poster, icon or the service's name, right of centre.
                 let cy = h / 2.0 + r;
@@ -282,14 +356,9 @@ impl App {
                 } else {
                     false
                 };
-                if !drawn {
-                    if let Some(c) = hero.web {
-                        let tw = 40.0 * r;
-                        self.gfx.text(&hero.name, w - 12.0 * r - tw, cy - 4.5 * r, tw, 7.0 * r, 600, c.alpha(opacity), Align::Right, 0, -0.03);
-                    } else if let Some((n, svg)) = hero.glyph.and_then(icons::icon) {
-                        let s = 11.0 * r;
-                        self.gfx.icon(n, svg, Rect::new(w - 12.0 * r - s, cy - s / 2.0, s, s), T2.alpha(opacity), false, 1.0);
-                    }
+                if !drawn && let Some((n, svg)) = hero.glyph.and_then(icons::icon) {
+                    let s = 11.0 * r;
+                    self.gfx.icon(n, svg, Rect::new(w - 12.0 * r - s, cy - s / 2.0, s, s), T2.alpha(opacity), false, 1.0);
                 }
             }
         }
@@ -401,7 +470,7 @@ impl App {
             self.gfx.fill(rect, CARD, radius);
             drawn = self.gfx.image_sized(&cap, rect, base, Fit::Cover, radius, 1.0).is_some();
         }
-        if drawn {
+        if drawn || it.is_some_and(|it| self.web_face(it, rect, radius, 1.0)) {
             return;
         }
         self.gfx.fill(rect, CARD, radius);
@@ -428,6 +497,27 @@ impl App {
         }
         let lh = self.gfx.text_height(&label, 1.125 * r, 400, rect.w - 2.0 * r, 2);
         self.gfx.text(&label, rect.x + r, rect.bottom() - 1.25 * r - lh, rect.w - 2.0 * r, 1.125 * r, 400, if focused { T1 } else { T2 }, Align::Center, 2, 0.0);
+    }
+
+    /// A streaming service's face (tile, launch screen): its colour with its mark or wordmark
+    /// centred. False for anything that is not a streaming service.
+    fn web_face(&mut self, it: &Item, rect: Rect, radius: f32, alpha: f32) -> bool {
+        let Some(look) = web_look(&it.id) else { return false };
+        let r = self.rem();
+        self.gfx.fill(rect, look.bg.alpha(alpha), radius);
+        self.gfx.stroke(rect.inset(0.5), LINE.alpha(0.08 * alpha), radius, 1.0);
+        match look.mark.and_then(icons::brand) {
+            Some((n, path)) => {
+                let s = rect.w * 0.44;
+                self.gfx.icon(n, path, Rect::new(rect.x + (rect.w - s) / 2.0, rect.y + (rect.h - s) / 2.0, s, s), look.fg.alpha(alpha), true, 0.0);
+            }
+            None => {
+                let size = (rect.w * 0.17).max(r);
+                let lh = self.gfx.text_height(&it.name, size, 700, rect.w - 2.0 * r, 2);
+                self.gfx.text(&it.name, rect.x + r, rect.y + (rect.h - lh) / 2.0, rect.w - 2.0 * r, size, 700, look.fg.alpha(alpha), Align::Center, 2, -0.02);
+            }
+        }
+        true
     }
 
     /// "Running", top left of a tile: the amber dot is the state.
@@ -483,7 +573,50 @@ impl App {
                 self.tile_face(rect, base, item.as_ref(), icon, &name, focused);
                 self.running_badge(rect);
             }
+            Tile::Social(s) => self.social_tile(s, rect, base, focused),
         }
+    }
+
+    /// A Discord tile: Discord's colour and mark for your channel, the account and setup;
+    /// otherwise a card with an avatar, server icon or line icon. Amber marks a state that is
+    /// on (muted, deafened).
+    fn social_tile(&mut self, s: &Soc, rect: Rect, base: (f32, f32), focused: bool) {
+        let r = self.rem();
+        let radius = 0.75 * r;
+        let f = self.soc_face(s);
+        let (name_c, sub_c) = if f.brand {
+            self.gfx.fill(rect, DISCORD, radius);
+            if let Some((n, path)) = icons::brand("discord") {
+                let size = rect.w * 0.36;
+                self.gfx.icon(n, path, Rect::new(rect.x + (rect.w - size) / 2.0, rect.y + rect.h * 0.2, size, size), WHITE, true, 0.0);
+            }
+            (WHITE, WHITE.alpha(0.78))
+        } else {
+            self.gfx.fill(rect, CARD, radius);
+            self.gfx.stroke(rect.inset(0.5), if f.on { ACCENT.alpha(0.7) } else { LINE }, radius, 1.0);
+            let s = 4.5 * r;
+            let k = base.0 / rect.w.max(1.0);
+            let img = Rect::new(rect.x + (rect.w - s) / 2.0, rect.y + 3.0 * r, s, s);
+            let drawn = f.image.as_ref().is_some_and(|p| self.gfx.image_sized(p, img, (s * k, s * k), Fit::Cover, s / 2.0, 1.0).is_some());
+            if !drawn && let Some((n, svg)) = f.glyph.and_then(icons::icon) {
+                let g = 3.5 * r;
+                self.gfx.icon(n, svg, Rect::new(rect.x + (rect.w - g) / 2.0, rect.y + 3.5 * r, g, g), if f.on { ACCENT } else { T2 }, false, 1.5);
+            }
+            (if focused { T1 } else { T2 }, if f.on { ACCENT } else { T3 })
+        };
+        let w = rect.w - 2.0 * r;
+        let sub_y = rect.bottom() - 1.25 * r - 0.95 * r * 1.3;
+        self.gfx.text(&f.sub, rect.x + r, sub_y, w, 0.95 * r, 400, sub_c, Align::Center, 0, 0.0);
+        let nh = self.gfx.text_height(&f.name, 1.125 * r, 500, w, 2);
+        self.gfx.text(&f.name, rect.x + r, sub_y - 0.35 * r - nh, w, 1.125 * r, 500, name_c, Align::Center, 2, 0.0);
+    }
+
+    /// The Discord tile shown with this id (`dc:` + `Soc::key`).
+    fn soc_by_key(&self, key: &str) -> Option<Soc> {
+        self.rows.iter().flat_map(|r| &r.tiles).find_map(|t| match t {
+            Tile::Social(s) if s.key() == key => Some(s.clone()),
+            _ => None,
+        })
     }
 
     // ---------- Hint bar ----------
@@ -500,6 +633,7 @@ impl App {
         let cy = bar.y + bar.h / 2.0;
         let (accept, options) = match self.focused_tile() {
             Some(Tile::Running(_)) => ("Resume", true),
+            Some(Tile::Social(s)) => (soc_verb(s), false),
             Some(Tile::Item(i)) => (if self.item_running(*i) { "Resume" } else { "Select" }, self.items[*i].source != "system"),
             Some(Tile::Nav { .. }) => ("Select", false),
             None => ("", false),
@@ -526,10 +660,20 @@ impl App {
 
     // ---------- Layers ----------
 
+    /// An option's height: one line, or two with a detail line (setup steps).
+    fn opt_height(&mut self, o: &Opt, width: f32) -> f32 {
+        let r = self.rem();
+        match &o.detail {
+            Some(d) => 3.1 * r + self.gfx.text_height(d, r, 400, width - 4.5 * r, 2) + 0.9 * r,
+            None => 4.0 * r,
+        }
+    }
+
     fn draw_options(&mut self, opts: &[Opt], focus: usize, x: f32, mut y: f32, width: f32) {
         let r = self.rem();
         for (i, o) in opts.iter().enumerate() {
-            let rect = Rect::new(x, y, width, 4.0 * r);
+            let oh = self.opt_height(o, width);
+            let rect = Rect::new(x, y, width, oh);
             let on = i == focus;
             if on {
                 self.gfx.fill(rect, RAISED, 10.0);
@@ -554,7 +698,10 @@ impl App {
                 let k = Rect::new(s.x + 0.25 * r + if sw { 1.25 * r } else { 0.0 }, s.y + 0.25 * r, 1.5 * r, 1.5 * r);
                 self.gfx.fill(k, if sw { INK } else { T2 }, 0.75 * r);
             }
-            y += 4.25 * r;
+            if let Some(d) = &o.detail {
+                self.gfx.text(d, tx, y + 3.1 * r, width - (tx - x) - r, r, 400, T3, Align::Left, 2, 0.0);
+            }
+            y += oh + 0.25 * r;
         }
     }
 
@@ -576,7 +723,9 @@ impl App {
                     // Long lists scroll so the focused option stays above the hints.
                     let start = 3.0 * r + th + 3.5 * r;
                     let limit = h - 6.0 * r;
-                    let off = ((focus + 1) as f32 * 4.25 * r - (limit - start)).max(0.0);
+                    let width = panel.w - 4.0 * r;
+                    let upto: f32 = opts.iter().take(focus + 1).map(|o| self.opt_height(o, width) + 0.25 * r).sum();
+                    let off = (upto - (limit - start)).max(0.0);
                     self.gfx.clip(Rect::new(panel.x, start - 0.5 * r, panel.w, limit - start + 0.5 * r));
                     self.draw_options(&opts, focus, x, start - off, panel.w - 4.0 * r);
                     self.gfx.unclip();
@@ -618,7 +767,7 @@ impl App {
         let p = Rect::new((w - pw) / 2.0, h / 2.0 - ph / 2.0 - h * 0.06, pw, ph);
         let grow = 0.9 + 0.1 * if m > 0.0 { ease(((now - at) / 560.0).clamp(0.0, 1.0)) as f32 } else { 1.0 };
         let drawn = it.art.capsule.as_ref().is_some_and(|cap| self.gfx.image_sized(cap, p.scaled(grow), (p.w, p.h), Fit::Cover, 12.0, t).is_some());
-        if !drawn {
+        if !drawn && !self.web_face(&it, p.scaled(grow), 12.0, t) {
             self.gfx.fill(p.scaled(grow), CARD.alpha(t), 12.0);
             let icon_ok = it.art.icon.as_ref().is_some_and(|icon| self.gfx.image_sized(icon, p.scaled(grow * 0.45), (p.w * 0.45, p.h * 0.45), Fit::Contain, 0.0, t).is_some());
             if !icon_ok && it.source == "web" {
@@ -659,12 +808,20 @@ impl App {
             tx += 2.5 * r;
         }
         let room = field.right() - tx - 1.25 * r;
+        let placeholder = match kb.purpose {
+            KbPurpose::Search => "Search games and apps",
+            KbPurpose::DcId => "Client ID",
+            KbPurpose::DcSecret => "Client Secret",
+            KbPurpose::Rename(_) => "Name",
+        };
+        // A secret is not shown on the TV.
+        let shown = if kb.purpose == KbPurpose::DcSecret { "\u{2022}".repeat(kb.text.chars().count()) } else { kb.text.clone() };
         let caret_x = if kb.text.is_empty() {
-            self.gfx.text(if search { "Search games and apps" } else { "Name" }, tx + 0.4 * r, ty, room, size, 400, T3, Align::Left, 0, 0.0);
+            self.gfx.text(placeholder, tx + 0.4 * r, ty, room, size, 400, T3, Align::Left, 0, 0.0);
             tx
         } else {
-            self.gfx.text(&kb.text, tx, ty, room, size, 400, T1, Align::Left, 0, 0.0);
-            tx + self.gfx.measure(&kb.text, size, 400).0.min(room)
+            self.gfx.text(&shown, tx, ty, room, size, 400, T1, Align::Left, 0, 0.0);
+            tx + self.gfx.measure(&shown, size, 400).0.min(room)
         };
         if kb.result.is_none() {
             self.gfx.fill(Rect::new(caret_x + 1.0, field.y + 0.85 * r, 2.0, field.h - 1.7 * r), ACCENT, 0.0);

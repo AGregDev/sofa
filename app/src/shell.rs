@@ -42,6 +42,86 @@ pub struct Window {
     pub hwnd: isize,
     pub title: String,
     pub exe: String,
+    /// The program's own name ("Firefox", "Google Chrome"), from its file description; empty
+    /// when the window's title names the app better (Windows' app hosts, script runtimes).
+    pub app: String,
+}
+
+/// A program's name from its version resource (FileDescription, else ProductName).
+pub fn describe(exe: &str) -> String {
+    use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
+    use windows::core::HSTRING;
+    let lower = exe.to_lowercase();
+    let base = lower.rsplit('\\').next().unwrap_or("");
+    // These host other apps: the window's title is the app's name.
+    if exe.is_empty()
+        || matches!(
+            base,
+            "applicationframehost.exe" | "java.exe" | "javaw.exe" | "python.exe" | "pythonw.exe" | "rundll32.exe" | "dllhost.exe" | "mmc.exe" | "cmd.exe" | "conhost.exe" | "explorer.exe"
+        )
+    {
+        return String::new();
+    }
+    let path = HSTRING::from(exe);
+    // SAFETY: the version block is sized as Windows reports and outlives every pointer
+    // VerQueryValueW returns into it; lengths come from Windows.
+    unsafe {
+        let size = GetFileVersionInfoSizeW(&path, None);
+        if size == 0 {
+            return String::new();
+        }
+        let mut block = vec![0u8; size as usize];
+        if GetFileVersionInfoW(&path, None, size, block.as_mut_ptr().cast()).is_err() {
+            return String::new();
+        }
+        let query = |sub: &str| -> Option<(*const u8, u32)> {
+            let mut p: *mut core::ffi::c_void = std::ptr::null_mut();
+            let mut n = 0u32;
+            VerQueryValueW(block.as_ptr().cast(), &HSTRING::from(sub), &mut p, &mut n).as_bool().then_some((p as *const u8, n)).filter(|(p, n)| !p.is_null() && *n > 0)
+        };
+        let mut langs: Vec<(u16, u16)> = Vec::new();
+        if let Some((p, n)) = query("\\VarFileInfo\\Translation") {
+            for i in 0..(n as usize / 4) {
+                let w = p.add(i * 4).cast::<u16>();
+                langs.push((w.read_unaligned(), w.add(1).read_unaligned()));
+            }
+        }
+        langs.extend([(0x0409, 0x04b0), (0x0409, 0x04e4), (0x0000, 0x04b0)]);
+        for key in ["FileDescription", "ProductName"] {
+            for (lang, cp) in &langs {
+                if let Some((p, n)) = query(&format!("\\StringFileInfo\\{lang:04x}{cp:04x}\\{key}")) {
+                    let chars = std::slice::from_raw_parts(p.cast::<u16>(), n as usize);
+                    let len = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
+                    let s = String::from_utf16_lossy(&chars[..len]).replace(['®', '™'], "");
+                    let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
+                    if !s.is_empty() {
+                        return s;
+                    }
+                }
+            }
+        }
+        String::new()
+    }
+}
+
+/// The page or document a window shows, without the app's name ("AGregDev/sofa — Mozilla
+/// Firefox" in Firefox is "AGregDev/sofa"). Empty when the title is only the app's name.
+pub fn page_title(title: &str, app: &str) -> String {
+    let t = title.trim();
+    let norm = |s: &str| s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+    let app_n = norm(app);
+    if app_n.is_empty() || norm(t) == app_n {
+        return if app_n.is_empty() { t.to_owned() } else { String::new() };
+    }
+    for sep in [" \u{2014} ", " \u{2013} ", " - ", " | "] {
+        if let Some((page, last)) = t.rsplit_once(sep) {
+            let last_n = norm(last);
+            if !last_n.is_empty() && (last_n.contains(&app_n) || app_n.contains(&last_n)) {
+                return page.trim().to_owned();
+            }
+        }
+    }
+    t.to_owned()
 }
 
 fn hwnd(h: isize) -> HWND {
@@ -88,7 +168,9 @@ fn exe_name(h: isize) -> String {
 }
 
 pub fn window(h: isize) -> Window {
-    Window { hwnd: h, title: title(h).replace('\t', " "), exe: exe_of(pid(h)) }
+    let exe = exe_of(pid(h));
+    let app = describe(&exe);
+    Window { hwnd: h, title: title(h).replace('\t', " "), exe, app }
 }
 
 /// The desktop, taskbar, Start menu and Windows Search: the parts of Windows that Sofa stands
@@ -122,6 +204,25 @@ fn is_fullscreen(h: isize) -> bool {
         }
         r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top && r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom
     }
+}
+
+/// The first visible, titled top-level window of a program (`discord.exe`).
+pub fn find_window(exe: &str) -> Option<isize> {
+    unsafe extern "system" fn each(h: HWND, l: LPARAM) -> windows::core::BOOL {
+        // SAFETY: `l` is the Vec passed below, alive for the whole enumeration.
+        let list = unsafe { &mut *(l.0 as *mut Vec<isize>) };
+        // SAFETY: plain query.
+        if unsafe { IsWindowVisible(h) }.as_bool() && !title(h.0 as isize).is_empty() {
+            list.push(h.0 as isize);
+        }
+        windows::core::BOOL(1)
+    }
+    let mut all: Vec<isize> = Vec::new();
+    // SAFETY: the callback only writes into `all`, which outlives the call.
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(&mut all as *mut Vec<isize> as isize));
+    }
+    all.into_iter().find(|&h| exe_name(h) == exe)
 }
 
 pub fn alive(h: isize) -> bool {
@@ -168,6 +269,20 @@ pub enum Event {
     SteamGrab,
     /// A window Sofa tracked as running has closed.
     Ended(isize),
+    /// The browser Sofa covered is ready and in front (0: it never showed; Sofa stepped aside
+    /// anyway).
+    Ready(isize),
+}
+
+/// A browser Sofa just started for a streaming service. Sofa's launch screen stays on top
+/// until that browser's window is full screen and has had time to draw, so the person never
+/// sees a window opening, resizing or painting.
+struct Cover {
+    exe: String,
+    since: f64,
+    /// The browser's window and when it was first seen full screen.
+    seen: Option<(isize, Option<f64>)>,
+    checked: isize,
 }
 
 pub struct Shell {
@@ -189,6 +304,9 @@ pub struct Shell {
     /// When "nothing in front" may next bring Sofa back (retries back off: during a screen
     /// saver or a locked screen no window can take the focus).
     idle_retry: f64,
+    cover: Option<Cover>,
+    /// The window a streaming service plays in, once Sofa handed the screen to it.
+    pub media: Option<isize>,
 }
 
 impl Shell {
@@ -207,7 +325,61 @@ impl Shell {
             top: false,
             last_app: None,
             idle_retry: 0.0,
+            cover: None,
+            media: None,
         }
+    }
+
+    /// Keeps Sofa's launch screen on top while the browser `exe` starts (see `Cover`).
+    pub fn cover(&mut self, exe: &std::path::Path, now: f64) {
+        self.cover = Some(Cover { exe: exe.to_string_lossy().to_lowercase(), since: now, seen: None, checked: 0 });
+        self.media = None;
+        self.set_top(true);
+    }
+
+    pub fn covering(&self) -> bool {
+        self.cover.is_some()
+    }
+
+    /// Whether the streaming window Sofa started is in front (the controller drives it).
+    pub fn media_in_front(&self) -> bool {
+        let Some(m) = self.media else { return false };
+        // SAFETY: plain query.
+        let fg = unsafe { GetForegroundWindow() }.0 as isize;
+        self.cover.is_none() && fg != 0 && alive(m) && (fg == m || pid(fg) == pid(m))
+    }
+
+    /// The covered browser's window, when one is in front: remembers it, and when it is full
+    /// screen and has drawn for a moment, steps aside for it.
+    fn check_cover(&mut self, fg: isize, now: f64) -> Option<Event> {
+        let c = self.cover.as_mut()?;
+        if fg != 0 && fg != self.sofa && fg != c.checked {
+            c.checked = fg;
+            if exe_of(pid(fg)).to_lowercase() == c.exe && c.seen.is_none_or(|(h, _)| h != fg) {
+                c.seen = Some((fg, None));
+            }
+        }
+        if let Some((h, full)) = &mut c.seen
+            && full.is_none()
+            && alive(*h)
+            && is_fullscreen(*h)
+        {
+            *full = Some(now);
+        }
+        let ready = c.seen.and_then(|(h, full)| full.filter(|t| now - t > 700.0).map(|_| h)).filter(|h| alive(*h));
+        if ready.is_none() && now - c.since < 12_000.0 {
+            return None;
+        }
+        self.cover = None;
+        self.set_top(false);
+        if let Some(h) = ready {
+            self.media = Some(h);
+            // A full-screen session: closing it brings Sofa back.
+            self.session = Some((h, now));
+            self.last_app = Some((h, true));
+            crate::platform::focus(hwnd(h));
+        }
+        Some(Event::Ready(ready.unwrap_or(0)))
     }
 
     /// Topmost while Sofa is the home screen, so nothing (Steam included) opens above it.
@@ -252,7 +424,7 @@ impl Shell {
             self.desktop = false;
             self.blur_at = None;
             self.set_top(true);
-        } else {
+        } else if self.cover.is_none() {
             self.blur_at = Some(now);
         }
     }
@@ -269,6 +441,7 @@ impl Shell {
         self.came_from = fg;
         self.desktop = false;
         self.last_app = None;
+        self.cover = None;
         (fg != 0 && fg != self.sofa && !is_shell(fg) && alive(fg)).then(|| window(fg))
     }
 
@@ -278,6 +451,12 @@ impl Shell {
         if fg == self.sofa {
             self.shell_since = None;
             return out;
+        }
+        if self.cover.is_some() {
+            out.extend(self.check_cover(fg, now));
+            if self.cover.as_ref().is_some_and(|c| c.seen.is_some_and(|(h, _)| h == fg)) || out.iter().any(|e| matches!(e, Event::Ready(_))) {
+                return out;
+            }
         }
         // Steam taking the screen from Sofa, or right after the PS button, with nothing
         // launched just now, is Steam answering the PS button: send it back under Sofa.
@@ -311,6 +490,11 @@ impl Shell {
     /// Timers: the guard's grace period, the full-screen app closing, dropping topmost.
     pub fn tick(&mut self, now: f64, focused: bool) -> Vec<Event> {
         let mut out = Vec::new();
+        if self.cover.is_some() {
+            // SAFETY: plain query. The browser may be in front without an event.
+            let fg = unsafe { GetForegroundWindow() }.0 as isize;
+            out.extend(self.check_cover(fg, now));
+        }
         // Nothing in front at all (the app that was closed, or Sofa started in the background):
         // Windows sends no event for that, so check here.
         // SAFETY: plain query.
@@ -349,6 +533,21 @@ impl Shell {
 
     /// Whether a timer is pending (the loop should wake up soon).
     pub fn busy(&self) -> bool {
-        self.shell_since.is_some() || self.blur_at.is_some() || self.session.is_some()
+        self.shell_since.is_some() || self.blur_at.is_some() || self.session.is_some() || self.cover.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::page_title;
+
+    #[test]
+    fn page_title_drops_the_app_name() {
+        assert_eq!(page_title("AGregDev/sofa: A controller-first home screen \u{2014} Mozilla Firefox", "Firefox"), "AGregDev/sofa: A controller-first home screen");
+        assert_eq!(page_title("Inbox - Gmail - Google Chrome", "Google Chrome"), "Inbox - Gmail");
+        assert_eq!(page_title("notes.txt - Notepad", "Notepad"), "notes.txt");
+        assert_eq!(page_title("Spotify", "Spotify"), "");
+        assert_eq!(page_title("Spotify Premium", "Spotify"), "Spotify Premium");
+        assert_eq!(page_title("Settings", ""), "Settings");
     }
 }

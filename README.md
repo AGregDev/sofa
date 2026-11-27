@@ -61,7 +61,8 @@ no helper processes: about **60 MB of memory** on Home, and almost nothing while
 **Your whole library**
 - Steam games with their own art and logos, RecompLauncher ports (Ocarina of Time, Majora's Mask and others), and every Start menu app with its icon.
 - Sorted into Games, Media, Apps and System automatically. Move, rename, hide or favorite anything.
-- Streaming: YouTube in its TV interface, Netflix, Disney+, Prime Video and Twitch full screen in Firefox, Chrome or Edge, each with its own TV profile.
+- Streaming: YouTube in its TV interface (the controller is its remote), Netflix, Disney+, Prime Video, Crunchyroll and Twitch, full screen in Edge, Chrome or Firefox with Sofa's own browser profile. Sofa's launch screen stays up until the service is ready.
+- Discord voice: your channel with Mute, Deafen and Leave, recent channels on Home, and your servers' voice channels, after a one-time Connect (a Sofa 1.x sign-in carries over).
 
 **Made for the DualSense, works with any pad**
 - No drivers: the DualSense is read directly, over USB or Bluetooth, with its battery and charging in the top bar. Xbox and other XInput pads work too, Guide button included.
@@ -83,7 +84,7 @@ off the main thread at the size it is drawn. Checked on every release by an auto
 
 ## Install
 
-1. Download **Sofa-Setup-2.0.0.exe** from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa. It replaces Sofa 1.x and keeps your settings.
+1. Download **Sofa-Setup-2.1.0.exe** from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa. It replaces Sofa 1.x and keeps your settings.
 2. On the first screen, choose whether Sofa starts with Windows and keeps Steam off the PS button, then **Continue**.
 3. Steam also listens to the PS button. Sofa turns off Steam's **Guide button focuses Steam** for you: by itself when Steam is closed, or after asking when Steam is open (Steam restarts in the background). You can turn this off in Settings.
 
@@ -128,7 +129,7 @@ cargo build --release
 | `powershell -ExecutionPolicy Bypass -File qa\qa.ps1` | Automated QA: drives every screen, checks memory and CPU, writes `shots\qa.txt` |
 | `sofa.exe --windowed` | Runs in a window instead of full screen (`--log` writes `%TEMP%\sofa-native.log`) |
 
-Copy `sofa.exe` to a name containing "setup" (`Sofa-Setup-2.0.0.exe`) and it installs itself.
+Copy `sofa.exe` to a name containing "setup" (`Sofa-Setup-2.1.0.exe`) and it installs itself.
 
 ## How it works
 

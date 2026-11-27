@@ -36,6 +36,10 @@ which is what Electron's `safeStorage` uses on Windows.
 Consequences: the JSON keys in `src/store.js` and the cover and icon paths are a compatibility
 contract. Electron's `safeStorage` wraps DPAPI with its own key file, so ADR-003 is met when the
 Rust app can read existing secrets; if it cannot, it asks the person to reconnect Discord once.
+Met (2026-11-27): `app/src/social.rs` opens 1.x's `enc:` values (AES-GCM with the key in
+`%APPDATA%\sofa\Local State`, that key protected with DPAPI), so an upgrade keeps the Discord
+sign-in. New values are written as `dpapi:` (DPAPI directly); 1.x cannot read those, so going
+back to 1.x means connecting Discord again.
 
 ## ADR-004: YouTube opens in TV mode in the browser
 Status: accepted (2026-11-27)
@@ -44,6 +48,9 @@ Decision: YouTube opens `https://www.youtube.com/tv` full screen in the chosen b
 profile, and Sofa turns the controller into the remote keys (arrows, Enter, Escape) while that
 window is in front.
 Consequences: no in-app web window; the browser's TV profile keeps its own sign-in.
+
+Amended (2026-11-27, ADR-009): streaming prefers a Chromium browser, Sofa's launch screen covers
+the browser's start, and the controller-to-remote-keys part is now implemented.
 
 ## ADR-005: Build beside 1.3.0, replace it when QA passes
 Status: superseded by ADR-008 (2026-11-27)
@@ -83,3 +90,27 @@ window logic became `app/src/shell.rs`.
 Consequences: one build, one QA run. Installing 2.0 removes 1.x and keeps `%APPDATA%\sofa`
 (ADR-003 still holds). `PORT_MAP.md` and `ANALYSIS.md` describe the port as it was while the
 JavaScript existed, and are no longer regenerated.
+
+## ADR-009: Streaming opens in a Chromium browser, under Sofa's launch screen
+Status: accepted (2026-11-27)
+Context: tested on a 3440 x 1440 screen, the Firefox TV profile looked soft (a fixed 1.5 zoom gave
+YouTube a 960-pixel-high page, so it drew its 720p layout scaled up), the browser visibly opened
+and resized before going full screen, and a second Firefox profile beside the person's own Firefox
+stops at "Firefox needs a quick restart" whenever an update waits. Firefox and Chrome also play
+Netflix and Disney+ at 720p at most; Edge plays them higher (PlayReady). YouTube's TV app reads
+remote keys, not controllers (no Gamepad API in its scripts).
+Decision: "Automatic" picks Edge, then Chrome, then Firefox. The page zoom follows the screen:
+TV pages get exactly 1080 CSS pixels of height, other sites 720. Chrome opens in kiosk mode (full
+screen from its first frame, no "press Esc" bubble); Edge opens a full-screen app window (its
+kiosk mode is always InPrivate, which would lose sign-ins). Sofa stays on top with its launch
+screen until the browser's window is full screen and has drawn for 0.7 s (12 s at most), with the
+browser's occlusion throttling off so it draws while covered. While that window is in front, the
+controller sends remote keys to YouTube's TV window (D-pad and stick: arrows, Cross: Enter,
+Circle: Escape, Square: play/pause) and Sofa holds back every key and click other programs synthesize (low-level hooks,
+installed only then): Steam's desktop layout sends arrows, Space and clicks for the same buttons,
+which first made Cross do nothing and Circle press Space. Sofa's own synthetic input carries
+`platform::SOFA_MARK`; the person's real keyboard and mouse always pass. Sites built for a mouse
+(Netflix, Crunchyroll) get neither, so Steam's stick-as-mouse keeps working there.
+Consequences: YouTube TV keeps its 16:9 menus centred on ultrawide screens (YouTube's own layout);
+video fills the screen. A sign-in made in the old Firefox TV profile is not carried over to the
+new browser profile. The remote needs a real controller to check (QA M13).

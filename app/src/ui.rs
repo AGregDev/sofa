@@ -7,6 +7,7 @@ use crate::input::{Action, Input};
 use crate::library::{self, Item, Launch};
 use crate::shell::{self, Shell, Window};
 use crate::sound::{self, Sound};
+use crate::social::{self, Req};
 use crate::store::Store;
 use crate::{install, platform};
 use serde_json::Value;
@@ -119,6 +120,53 @@ pub(crate) enum Tile {
     Nav { cat: String, count: usize },
     /// A running app, by its window.
     Running(isize),
+    /// Discord voice (Home's row and the Social tab).
+    Social(Soc),
+}
+
+/// A Discord tile, by what it does (channel, server and member ids are Discord's).
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum Soc {
+    /// The voice channel you are in.
+    Here,
+    Mute,
+    Deaf,
+    Leave,
+    /// A recent voice channel: selecting joins it.
+    Join(String),
+    Server(String),
+    Member(String),
+    Account,
+    Setup,
+    /// Discord is not running: selecting opens it.
+    Open,
+}
+
+impl Soc {
+    pub(crate) fn key(&self) -> String {
+        match self {
+            Soc::Here => "here".into(),
+            Soc::Mute => "mute".into(),
+            Soc::Deaf => "deaf".into(),
+            Soc::Leave => "leave".into(),
+            Soc::Join(id) => format!("vc:{id}"),
+            Soc::Server(id) => format!("g:{id}"),
+            Soc::Member(id) => format!("m:{id}"),
+            Soc::Account => "account".into(),
+            Soc::Setup => "setup".into(),
+            Soc::Open => "open".into(),
+        }
+    }
+}
+
+/// The Connect Discord steps in progress (nothing is saved until Connect).
+#[derive(Default)]
+pub(crate) struct DcSetup {
+    pub client_id: String,
+    pub secret: Option<String>,
+    pub msg: String,
+    /// Connect was selected: the next answer from Discord closes or explains the sheet.
+    pub waiting: bool,
 }
 
 pub(crate) struct Row {
@@ -163,6 +211,15 @@ pub(crate) enum Act {
     SteamFixNow,
     WelcomeDone,
     Close,
+    DcPage,
+    DcId,
+    DcSecret,
+    DcConnect,
+    DcRedo,
+    DcForget,
+    DcForgetNow,
+    DcJoin(String),
+    DcLeave,
 }
 
 #[derive(Clone)]
@@ -171,12 +228,18 @@ pub(crate) struct Opt {
     pub icon: Option<&'static str>,
     pub value: Option<String>,
     pub switch: Option<bool>,
+    /// A second, smaller line under the label (setup steps).
+    pub detail: Option<String>,
     pub act: Act,
 }
 
 impl Opt {
     fn new(label: impl Into<String>, act: Act) -> Opt {
-        Opt { label: label.into(), icon: None, value: None, switch: None, act }
+        Opt { label: label.into(), icon: None, value: None, switch: None, detail: None, act }
+    }
+    fn detail(mut self, d: impl Into<String>) -> Opt {
+        self.detail = Some(d.into());
+        self
     }
     fn icon(mut self, i: &'static str) -> Opt {
         self.icon = Some(i);
@@ -197,12 +260,20 @@ pub(crate) enum SheetKind {
     Settings,
     Item,
     Run,
+    DcSetup,
+    DcAccount,
+    /// Who is in your voice channel.
+    DcVoice,
+    /// A server's voice channels (`App::dc_server`).
+    DcServer,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum KbPurpose {
     Search,
     Rename(usize),
+    DcId,
+    DcSecret,
 }
 
 /// The on-screen keyboard: 4 rows of 10 characters, then the bottom row.
@@ -276,9 +347,18 @@ pub struct App {
     pads: (bool, bool, bool),
     pending_rescan: bool,
     scanned_at: f64,
+    /// The streaming service Sofa last opened (its window is `shell.media`).
+    media_item: Option<String>,
+    pub(crate) social: social::Social,
+    /// Discord as last read (the `discord` thread updates it, WM_SOCIAL).
+    pub(crate) voice: social::Voice,
+    social_at: f64,
+    pub(crate) dc: DcSetup,
+    pub(crate) dc_server: Option<String>,
+    dc_authorizing: bool,
 }
 
-const TABS: [(&str, &str); 5] = [("home", "Home"), ("games", "Games"), ("media", "Media"), ("apps", "Apps"), ("system", "System")];
+const TABS: [(&str, &str); 6] = [("home", "Home"), ("games", "Games"), ("media", "Media"), ("apps", "Apps"), ("social", "Social"), ("system", "System")];
 
 pub(crate) fn cat_label(c: &str) -> &'static str {
     match c {
@@ -299,6 +379,10 @@ impl App {
     pub fn new(gfx: Gfx, input: Input, shell: Shell, data: PathBuf, icon_png: PathBuf, welcome_jpg: PathBuf, qa: bool, now: f64) -> App {
         let store = Store::open(&data);
         let cache = data.join("cache");
+        // Discord voice: never in a QA run (it would talk to the real Discord).
+        let discord = store.map("social").get("discord").cloned().unwrap_or(Value::Null);
+        let social = social::Social::start(data.clone(), cache.clone(), shell.sofa, discord, !qa);
+        let voice = social.snapshot();
         let mut app = App {
             gfx,
             input,
@@ -308,6 +392,13 @@ impl App {
             cache,
             items: Vec::new(),
             running: Vec::new(),
+            media_item: None,
+            social,
+            voice,
+            social_at: -1e9,
+            dc: DcSetup::default(),
+            dc_server: None,
+            dc_authorizing: false,
             tab: "home".into(),
             rows: Vec::new(),
             grid: false,
@@ -352,6 +443,7 @@ impl App {
     /// silently when Steam is closed).
     pub fn startup(&mut self, now: f64) {
         self.scan_in_background(now);
+        self.social_refresh(now, 0.0);
         if self.store.top_flag("setupDone") && self.store.flag("steamGuide") {
             self.steam_fix(false);
         }
@@ -379,7 +471,7 @@ impl App {
         let browser = platform::chosen_browser(self.store.text("browser")).map(|b| b.exe);
         let (_, items) = library::build(&self.cache, &self.store.map("overrides"), &self.store.map("recent"), browser);
         for r in &mut self.running {
-            r.item = library::identify(&items, &r.win.exe);
+            r.item = library::identify(&items, &r.win.exe).or_else(|| library::identify_name(&items, &r.win.app));
         }
         self.items = items;
         self.pending_rescan = false;
@@ -437,8 +529,10 @@ impl App {
     pub(crate) fn rebuild(&mut self, keep: bool) {
         let keep_id = keep.then(|| self.focused_tile_id()).flatten();
         let mut rows = Vec::new();
-        self.grid = self.tab != "home";
-        if self.tab == "home" {
+        self.grid = self.tab != "home" && self.tab != "social";
+        if self.tab == "social" {
+            rows = self.social_rows();
+        } else if self.tab == "home" {
             let visible: Vec<usize> = (0..self.items.len()).filter(|&i| !matches!(self.items[i].category.as_str(), "hidden" | "system")).collect();
             let mut recent: Vec<usize> = visible.iter().copied().filter(|&i| self.items[i].last_played > 0.0).collect();
             recent.sort_by(|&a, &b| self.items[b].last_played.partial_cmp(&self.items[a].last_played).unwrap_or(std::cmp::Ordering::Equal));
@@ -450,6 +544,9 @@ impl App {
                 }
             };
             push("running", "Running", self.running.iter().map(|r| Tile::Running(r.win.hwnd)).collect(), self.running.len());
+            let voice = self.voice_tiles();
+            let n = voice.len();
+            push("voice", "Discord voice", voice, n);
             push("recent", "Jump back in", recent.iter().map(|&i| Tile::Item(i)).collect(), recent.len());
             push("fav", "Favorites", favs.iter().map(|&i| Tile::Item(i)).collect(), favs.len());
             for cat in ["games", "media", "apps"] {
@@ -499,6 +596,7 @@ impl App {
             Tile::Item(i) => self.items[*i].id.clone(),
             Tile::Nav { cat, .. } => format!("nav:{cat}"),
             Tile::Running(h) => format!("run:{h}"),
+            Tile::Social(s) => format!("dc:{}", s.key()),
         }
     }
 
@@ -520,10 +618,24 @@ impl App {
         if let Some(it) = run.item.and_then(|i| self.items.get(i)) {
             return it.name.clone();
         }
+        if !run.win.app.is_empty() {
+            return run.win.app.clone();
+        }
         if !run.win.title.trim().is_empty() {
             return run.win.title.trim().to_owned();
         }
         std::path::Path::new(&run.win.exe).file_stem().map_or("App".into(), |s| s.to_string_lossy().to_string())
+    }
+
+    /// What a running app shows (a browser's page, an editor's document), for the hero's meta
+    /// line. Empty for games and when the title is only the app's name.
+    pub(crate) fn run_page(&self, h: isize) -> String {
+        let Some(run) = self.run_of(h) else { return String::new() };
+        if run.item.and_then(|i| self.items.get(i)).is_some_and(|it| it.category == "games" || it.source == "web") {
+            return String::new();
+        }
+        let app = if run.win.app.is_empty() { self.run_name(h) } else { run.win.app.clone() };
+        shell::page_title(&shell::title(h), &app)
     }
 
     /// Whether a library item is running (it has a Running card).
@@ -697,6 +809,9 @@ impl App {
         if self.tab == tab {
             return;
         }
+        if tab == "social" || tab == "home" {
+            self.social_refresh(now, 30_000.0);
+        }
         self.tab_focus.insert(self.tab.clone(), self.focus);
         self.tab = tab.to_owned();
         self.scale.clear();
@@ -717,7 +832,7 @@ impl App {
             let browser = platform::chosen_browser(self.store.text("browser")).map(|b| b.exe);
             let (_, items) = library::build(&self.cache, &self.store.map("overrides"), &self.store.map("recent"), browser);
             for r in &mut self.running {
-                r.item = library::identify(&items, &r.win.exe);
+                r.item = library::identify(&items, &r.win.exe).or_else(|| library::identify_name(&items, &r.win.app));
             }
             self.items = items;
         }
@@ -761,7 +876,9 @@ impl App {
         if w.hwnd == 0 || w.hwnd == self.shell.sofa {
             return false;
         }
-        let item = library::identify(&self.items, &w.exe);
+        // The streaming window Sofa opened is that service (YouTube), not "Google Chrome".
+        let media = (self.shell.media == Some(w.hwnd)).then(|| self.media_item.as_ref().and_then(|id| self.items.iter().position(|it| &it.id == id))).flatten();
+        let item = media.or_else(|| library::identify(&self.items, &w.exe)).or_else(|| library::identify_name(&self.items, &w.app));
         if strict && item.is_none() {
             return false;
         }
@@ -802,6 +919,7 @@ impl App {
             }
             Some(Tile::Item(i)) => self.open_item(i, now),
             Some(Tile::Running(h)) => self.resume(h),
+            Some(Tile::Social(s)) => self.social_action(s, now),
             None => {}
         }
     }
@@ -850,16 +968,30 @@ impl App {
 
     fn start(&mut self, i: usize, now: f64) {
         let it = self.items[i].clone();
-        let ok = self.qa || {
-            self.shell.step_down(now);
-            match &it.launch {
-                Launch::Url(u) => platform::open(u),
-                Launch::AppsFolder(id) => platform::apps_folder(id),
-                Launch::Exec { exe, args } => platform::run(exe, args),
-                Launch::Web { url, tv } => platform::open_web(&self.data, self.store.text("browser"), url.as_deref(), *tv),
-                Launch::System { .. } => false,
-            }
-        };
+        let ok = self.qa
+            || match &it.launch {
+                Launch::Web { url, tv } => {
+                    let (ok, browser) = platform::open_web(&self.data, self.store.text("browser"), url.as_deref(), *tv);
+                    match browser {
+                        // The launch screen stays on top until the browser is ready.
+                        Some(exe) => {
+                            self.shell.cover(&exe, now);
+                            self.media_item = Some(it.id.clone());
+                        }
+                        None => self.shell.step_down(now),
+                    }
+                    ok
+                }
+                launch => {
+                    self.shell.step_down(now);
+                    match launch {
+                        Launch::Url(u) => platform::open(u),
+                        Launch::AppsFolder(id) => platform::apps_folder(id),
+                        Launch::Exec { exe, args } => platform::run(exe, args),
+                        Launch::Web { .. } | Launch::System { .. } => false,
+                    }
+                }
+            };
         if ok {
             sound::play(Sound::Launch);
             self.store.map_mut("recent").insert(it.id.clone(), Value::from(epoch_ms()));
@@ -1111,6 +1243,19 @@ impl App {
     /// Finishes the keyboard: rename saves, search just closes.
     pub fn kb_done(&mut self) {
         let Some(Layer::Keyboard(kb)) = self.layers.pop() else { return };
+        match kb.purpose {
+            KbPurpose::DcId => {
+                self.dc.client_id = kb.text.trim().to_owned();
+                self.focus_setup(3);
+            }
+            KbPurpose::DcSecret => {
+                if !kb.text.trim().is_empty() {
+                    self.dc.secret = Some(kb.text.trim().to_owned());
+                }
+                self.focus_setup(4);
+            }
+            _ => {}
+        }
         if let KbPurpose::Rename(i) = kb.purpose {
             let name = kb.text.trim().to_owned();
             if name.is_empty() {
@@ -1476,6 +1621,7 @@ impl App {
             Act::Close => {
                 self.layers.pop();
             }
+            dc @ (Act::DcPage | Act::DcId | Act::DcSecret | Act::DcConnect | Act::DcRedo | Act::DcForget | Act::DcForgetNow | Act::DcJoin(_) | Act::DcLeave) => self.dc_run(dc),
         }
     }
 
@@ -1640,6 +1786,7 @@ impl App {
         }
         if let Some(Layer::Launch { at, .. }) = self.layers.last()
             && now - at > 7000.0
+            && !self.shell.covering()
         {
             self.layers.pop();
             self.dirty = true;
@@ -1721,13 +1868,453 @@ pub(crate) fn clock_minute() -> u16 {
     t.wHour * 60 + t.wMinute
 }
 
+impl App {
+    /// The browser Sofa covered is in front and drawn (`h`), or never showed (0).
+    pub fn media_ready(&mut self, h: isize) {
+        if h == 0 {
+            self.media_item = None;
+        }
+        self.dirty = true;
+    }
+
+    /// Whether the controller is the remote of the TV window Sofa opened (YouTube's TV
+    /// interface, in front). Sites built for a mouse (Netflix, Crunchyroll) keep whatever
+    /// the person uses there, such as Steam's stick-as-mouse.
+    pub fn remote_active(&self) -> bool {
+        let tv = self.media_item.as_ref().and_then(|id| self.items.iter().find(|i| &i.id == id)).is_some_and(|i| matches!(i.launch, Launch::Web { tv: true, .. }));
+        !self.qa && !self.focused && tv && self.shell.media_in_front()
+    }
+
+    /// A controller action while the streaming window is in front: the remote's key
+    /// (✕ select, ○ back, D-pad and stick move, □ play/pause, L2/R2 volume).
+    pub fn remote_action(&mut self, a: Action) {
+        use windows::Win32::UI::Input::KeyboardAndMouse::*;
+        let vk = match a {
+            Action::Up => VK_UP,
+            Action::Down => VK_DOWN,
+            Action::Left => VK_LEFT,
+            Action::Right => VK_RIGHT,
+            Action::Accept => VK_RETURN,
+            Action::Back => VK_ESCAPE,
+            Action::Search => VK_MEDIA_PLAY_PAUSE,
+            Action::VolUp | Action::VolDown => return volume(a == Action::VolUp),
+            _ => return,
+        };
+        send_key(vk.0);
+    }
+}
+
+/// How a Discord tile looks: its name and second line, a line icon or Discord's mark, an
+/// avatar or server icon when Discord has one, and whether its state is on (muted).
+pub(crate) struct SocFace {
+    pub name: String,
+    pub sub: String,
+    pub glyph: Option<&'static str>,
+    pub brand: bool,
+    pub on: bool,
+    pub image: Option<PathBuf>,
+}
+
+/// A Discord application's Client ID: a long number.
+#[allow(non_snake_case)]
+fn DISCORD_ID(s: &str) -> bool {
+    (17..=21).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// A Client Secret: 24 to 64 letters, digits, `_` and `-`.
+#[allow(non_snake_case)]
+fn DISCORD_SECRET(s: &str) -> bool {
+    (24..=64).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Discord voice (a port of Sofa 1.x's Social screens, `renderer/app.js`).
+impl App {
+    /// Asks the `discord` thread for fresh state when the last ask is older than `max_age` ms.
+    pub(crate) fn social_refresh(&mut self, now: f64, max_age: f64) {
+        if self.voice.configured && now - self.social_at >= max_age {
+            self.social_at = now;
+            self.social.send(Req::Refresh(false));
+        }
+    }
+
+    /// WM_SOCIAL: Discord's state changed.
+    pub fn social_changed(&mut self, now: f64) {
+        if let Some(cfg) = self.social.take_save() {
+            self.store.map_mut("social").insert("discord".into(), cfg);
+            self.store.flush();
+        }
+        let v = self.social.snapshot();
+        if v == self.voice {
+            return;
+        }
+        let was = std::mem::replace(&mut self.voice, v);
+        // Discord's "Authorize" prompt shows in Discord's window: Sofa steps aside for it, and
+        // comes back once it was answered.
+        if self.voice.authorizing && !self.dc_authorizing {
+            self.dc_authorizing = true;
+            self.shell.hand_off();
+            if let Some(h) = shell::find_window("discord.exe") {
+                platform::focus(windows::Win32::Foundation::HWND(h as *mut _));
+            }
+        } else if !self.voice.authorizing && self.dc_authorizing {
+            self.dc_authorizing = false;
+            platform::focus(windows::Win32::Foundation::HWND(self.shell.sofa as *mut _));
+        }
+        if self.dc.waiting && !self.voice.busy && !self.voice.authorizing {
+            self.dc.waiting = false;
+            if self.voice.ready {
+                self.layers.retain(|l| !matches!(l, Layer::Sheet { kind: SheetKind::DcSetup, .. }));
+                let who = self.voice.user.clone().unwrap_or_else(|| "your account".into());
+                self.toast("Discord connected", &format!("Signed in as {who}"));
+            } else {
+                self.dc.msg = self.voice.error.clone().unwrap_or_else(|| "Discord didn't answer. Is it open and signed in?".into());
+            }
+        }
+        self.refresh_dc_sheets();
+        let rows_changed = was.current != self.voice.current
+            || was.mute != self.voice.mute
+            || was.deaf != self.voice.deaf
+            || was.recent != self.voice.recent
+            || was.guilds != self.voice.guilds
+            || was.ready != self.voice.ready
+            || was.configured != self.voice.configured
+            || was.error != self.voice.error;
+        if rows_changed && (self.tab == "home" || self.tab == "social") && !self.layers_hold_items() {
+            self.rebuild(true);
+            if let Some(id) = self.focused_tile_id() {
+                self.show_hero(id, now);
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// Home's row: the channel you are in with its controls, then channels you joined recently.
+    fn voice_tiles(&self) -> Vec<Tile> {
+        let v = &self.voice;
+        if !v.configured || !v.ready {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if v.current.is_some() {
+            out.extend([Soc::Here, Soc::Mute, Soc::Deaf, Soc::Leave].map(Tile::Social));
+        }
+        let here = v.current.as_ref().map(|c| c.id.as_str());
+        out.extend(v.recent.iter().filter(|c| Some(c.id.as_str()) != here).map(|c| Tile::Social(Soc::Join(c.id.clone()))));
+        out
+    }
+
+    /// The Social tab: your channel (who is in it, mute, deafen, leave), your servers, or
+    /// the way to connect.
+    fn social_rows(&self) -> Vec<Row> {
+        let v = &self.voice;
+        let mut rows = Vec::new();
+        if let Some(c) = &v.current {
+            let mut tiles: Vec<Tile> = c.members.iter().map(|m| Tile::Social(Soc::Member(m.id.clone()))).collect();
+            tiles.extend([Soc::Mute, Soc::Deaf, Soc::Leave].map(Tile::Social));
+            rows.push(Row { key: "voice".into(), title: c.name.clone(), count: c.members.len(), tiles });
+        }
+        if v.ready && !v.guilds.is_empty() {
+            let mut tiles: Vec<Tile> = v.guilds.iter().map(|g| Tile::Social(Soc::Server(g.id.clone()))).collect();
+            tiles.push(Tile::Social(Soc::Account));
+            rows.push(Row { key: "servers".into(), title: "Discord servers".into(), count: v.guilds.len(), tiles });
+        } else if v.configured && v.not_running {
+            rows.push(Row { key: "dsetup".into(), title: "Discord".into(), count: 0, tiles: vec![Tile::Social(Soc::Open)] });
+        } else {
+            rows.push(Row { key: "dsetup".into(), title: "Discord".into(), count: 0, tiles: vec![Tile::Social(Soc::Setup)] });
+        }
+        rows
+    }
+
+    pub(crate) fn soc_face(&self, s: &Soc) -> SocFace {
+        let v = &self.voice;
+        let face = |name: String, sub: String, glyph: Option<&'static str>, brand: bool, on: bool, image: Option<PathBuf>| SocFace { name, sub, glyph, brand, on, image };
+        let in_voice = |n: usize| if n == 1 { "1 in voice".to_owned() } else { format!("{n} in voice") };
+        match s {
+            Soc::Here => {
+                let c = v.current.clone().unwrap_or_default();
+                face(c.name, in_voice(c.members.len()), None, true, true, None)
+            }
+            Soc::Mute => face(if v.mute { "Unmute" } else { "Mute" }.into(), if v.mute { "Muted".into() } else { "Microphone on".into() }, Some(if v.mute { "micOff" } else { "mic" }), false, v.mute, None),
+            Soc::Deaf => face(if v.deaf { "Undeafen" } else { "Deafen" }.into(), if v.deaf { "Deafened".into() } else { "Hearing voice".into() }, Some("headphones"), false, v.deaf, None),
+            Soc::Leave => face("Leave voice".into(), v.current.as_ref().map(|c| c.name.clone()).unwrap_or_default(), Some("close"), false, false, None),
+            Soc::Join(id) => {
+                let c = v.recent.iter().find(|c| &c.id == id).cloned().unwrap_or_default();
+                let sub = if c.members.is_empty() { if c.guild.is_empty() { "Empty".into() } else { c.guild.clone() } } else { in_voice(c.members.len()) };
+                let image = c.members.iter().find_map(|m| m.avatar.clone());
+                face(c.name, sub, Some("sound"), false, false, image)
+            }
+            Soc::Server(id) => {
+                let g = v.guilds.iter().find(|g| &g.id == id).cloned().unwrap_or_default();
+                face(g.name, "Voice channels".into(), Some("users"), false, false, g.icon)
+            }
+            Soc::Member(id) => {
+                let m = v.current.as_ref().and_then(|c| c.members.iter().find(|m| &m.id == id)).cloned().unwrap_or_default();
+                face(m.name, if m.muted { "Muted".into() } else { "In voice".into() }, Some("users"), false, false, m.avatar)
+            }
+            Soc::Account => face("Discord account".into(), v.user.clone().unwrap_or_else(|| "Connected".into()), None, true, false, None),
+            Soc::Setup => {
+                let err = v.configured.then(|| v.error.clone()).flatten();
+                face(if err.is_some() { "Reconnect Discord" } else { "Connect Discord" }.into(), err.unwrap_or_else(|| "Join voice from the couch".into()), None, true, false, None)
+            }
+            Soc::Open => face("Open Discord".into(), "Discord needs to be running".into(), None, true, false, None),
+        }
+    }
+
+    fn social_action(&mut self, s: Soc, now: f64) {
+        sound::play(Sound::Select);
+        match s {
+            // The tile flips at once; Discord's answer confirms it.
+            Soc::Mute => {
+                self.voice.mute = !self.voice.mute;
+                self.social.send(Req::SetVoice { mute: Some(self.voice.mute), deaf: None });
+            }
+            Soc::Deaf => {
+                self.voice.deaf = !self.voice.deaf;
+                self.social.send(Req::SetVoice { mute: None, deaf: Some(self.voice.deaf) });
+            }
+            Soc::Leave => self.social.send(Req::Join(None)),
+            Soc::Join(id) => self.social.send(Req::Join(Some(id))),
+            Soc::Here | Soc::Member(_) => self.voice_sheet(),
+            Soc::Server(id) => {
+                let name = self.voice.guilds.iter().find(|g| g.id == id).map(|g| g.name.clone()).unwrap_or_default();
+                self.dc_server = Some(id.clone());
+                self.social.send(Req::Server(id));
+                let loading = vec![Opt::new("Loading voice channels", Act::Close).icon("sound")];
+                self.layers.push(Layer::Sheet { title: name, sub: "Voice channels".into(), opts: loading, focus: 0, kind: SheetKind::DcServer });
+            }
+            Soc::Account => self.discord_account(),
+            Soc::Setup => self.discord_setup(),
+            Soc::Open => match self.items.iter().position(|i| i.source == "start" && i.name.eq_ignore_ascii_case("discord")) {
+                Some(i) => self.open_item(i, now),
+                None => self.layers.push(Layer::Dialog {
+                    title: "Discord isn't installed".into(),
+                    body: "Install Discord on this PC, then open it once and sign in.".into(),
+                    opts: vec![Opt::new("OK", Act::Close).icon("check")],
+                    focus: 0,
+                }),
+            },
+        }
+        self.dirty = true;
+        if self.tab == "home" || self.tab == "social" {
+            self.rebuild(true);
+        }
+    }
+
+    fn setup_opts(&self) -> Vec<Opt> {
+        let id = &self.dc.client_id;
+        let has_secret = self.dc.secret.is_some() || self.voice.configured;
+        let step = |done: bool, icon: &'static str| if done { "check" } else { icon };
+        let short = if id.len() > 6 { format!("{}…", &id[..6]) } else { id.clone() };
+        let connect = if self.dc.waiting {
+            "Waiting for Discord. Approve Sofa there.".to_owned()
+        } else if !self.dc.msg.is_empty() {
+            self.dc.msg.clone()
+        } else {
+            "Discord asks you to Authorize Sofa once.".to_owned()
+        };
+        vec![
+            Opt::new("Make a Discord application", Act::DcPage).icon(step(!id.is_empty(), "globe")).detail("Opens discord.com/developers. Choose New Application and name it Sofa."),
+            Opt::new("Add the redirect", Act::DcPage).icon(step(!id.is_empty(), "link")).detail(format!("In OAuth2, add the redirect {} and save.", social::REDIRECT)),
+            Opt::new("Paste the Client ID", Act::DcId).icon(step(!id.is_empty(), "rename")).detail("Copy it from OAuth2, then select this.").value(short),
+            Opt::new("Paste the Client Secret", Act::DcSecret).icon(step(has_secret, "rename")).detail("Reset Secret, copy it, then select this.").value(if has_secret { "Saved" } else { "" }),
+            Opt::new("Connect", Act::DcConnect).icon("play").detail(connect),
+        ]
+    }
+
+    /// Connect Discord: one-time setup, step by step (1.x's walkthrough).
+    fn discord_setup(&mut self) {
+        sound::play(Sound::Open);
+        if self.dc.client_id.is_empty() {
+            self.dc.client_id = self.store.map("social").get("discord").and_then(|d| d.get("clientId")).and_then(Value::as_str).unwrap_or("").to_owned();
+        }
+        self.dc.msg.clear();
+        let opts = self.setup_opts();
+        let focus = if self.dc.client_id.is_empty() { 0 } else if self.dc.secret.is_none() && !self.voice.configured { 3 } else { 4 };
+        self.layers.push(Layer::Sheet {
+            title: "Connect Discord".into(),
+            sub: "One-time setup, about two minutes: Discord only lets apps you made control voice.".into(),
+            opts,
+            focus,
+            kind: SheetKind::DcSetup,
+        });
+    }
+
+    fn discord_account(&mut self) {
+        sound::play(Sound::Open);
+        let who = self.voice.user.clone().unwrap_or_else(|| "your account".into());
+        self.layers.push(Layer::Sheet {
+            title: "Discord".into(),
+            sub: format!("Signed in as {who}. Sofa stays signed in until you disconnect."),
+            opts: vec![Opt::new("Set up again", Act::DcRedo).icon("restart"), Opt::new("Disconnect", Act::DcForget).icon("close")],
+            focus: 0,
+            kind: SheetKind::DcAccount,
+        });
+    }
+
+    fn voice_opts(&self) -> Vec<Opt> {
+        let mut opts: Vec<Opt> = self
+            .voice
+            .current
+            .iter()
+            .flat_map(|c| &c.members)
+            .map(|m| {
+                let o = Opt::new(m.name.clone(), Act::Close).icon("users");
+                if m.muted { o.value("Muted") } else { o }
+            })
+            .collect();
+        opts.push(Opt::new("Leave voice", Act::DcLeave).icon("close"));
+        opts
+    }
+
+    fn voice_sheet(&mut self) {
+        let Some(c) = self.voice.current.clone() else { return };
+        sound::play(Sound::Open);
+        let n = c.members.len();
+        self.layers.push(Layer::Sheet { title: c.name, sub: format!("{n} in voice"), opts: self.voice_opts(), focus: 0, kind: SheetKind::DcVoice });
+    }
+
+    /// Open Discord sheets follow what Discord says.
+    fn refresh_dc_sheets(&mut self) {
+        let setup = self.setup_opts();
+        let voice = self.voice_opts();
+        let server = match (&self.dc_server, &self.voice.server) {
+            (Some(want), Some((got, list))) if want == got => Some(if list.is_empty() {
+                vec![Opt::new("No voice channels you can join", Act::Close).icon("sound")]
+            } else {
+                let here = self.voice.current.as_ref().map(|c| c.id.clone());
+                list.iter()
+                    .map(|c| {
+                        let n = c.members.len();
+                        let value = if Some(&c.id) == here.as_ref() { "You're here".to_owned() } else if n > 0 { format!("{n} in voice") } else { String::new() };
+                        Opt::new(c.name.clone(), Act::DcJoin(c.id.clone())).icon("sound").value(value)
+                    })
+                    .collect()
+            }),
+            _ => None,
+        };
+        let in_voice = self.voice.current.is_some();
+        for l in &mut self.layers {
+            if let Layer::Sheet { opts, focus, kind, .. } = l {
+                let fresh = match kind {
+                    SheetKind::DcSetup => Some(setup.clone()),
+                    SheetKind::DcVoice if in_voice => Some(voice.clone()),
+                    SheetKind::DcServer => server.clone(),
+                    _ => None,
+                };
+                if let Some(f) = fresh {
+                    *focus = (*focus).min(f.len().saturating_sub(1));
+                    *opts = f;
+                }
+            }
+        }
+        if !in_voice {
+            self.layers.retain(|l| !matches!(l, Layer::Sheet { kind: SheetKind::DcVoice, .. }));
+        }
+    }
+
+    /// The Discord options of the sheets above.
+    fn dc_run(&mut self, act: Act) {
+        match act {
+            Act::DcPage => {
+                if !self.qa {
+                    self.shell.step_down(0.0);
+                    platform::open(social::DEVELOPERS);
+                }
+            }
+            Act::DcId => {
+                // Copied on the PC: selecting the step pastes it.
+                let clip = platform::clipboard_text().trim().to_owned();
+                if DISCORD_ID(&clip) {
+                    self.dc.client_id = clip;
+                    self.dc.msg.clear();
+                    self.focus_setup(3);
+                } else {
+                    let id = self.dc.client_id.clone();
+                    self.keyboard(KbPurpose::DcId, id);
+                }
+            }
+            Act::DcSecret => {
+                let clip = platform::clipboard_text().trim().to_owned();
+                if DISCORD_SECRET(&clip) && !DISCORD_ID(&clip) {
+                    self.dc.secret = Some(clip);
+                    self.dc.msg.clear();
+                    self.focus_setup(4);
+                } else {
+                    self.keyboard(KbPurpose::DcSecret, String::new());
+                }
+            }
+            Act::DcConnect => {
+                if !DISCORD_ID(&self.dc.client_id) {
+                    self.dc.msg = "The Client ID is a long number from the OAuth2 page.".into();
+                    return self.focus_setup(2);
+                }
+                if self.dc.secret.is_none() && !self.voice.configured {
+                    self.dc.msg = "Paste the Client Secret first.".into();
+                    return self.focus_setup(3);
+                }
+                self.dc.msg.clear();
+                self.dc.waiting = true;
+                self.social.send(Req::Configure { client_id: self.dc.client_id.clone(), secret: self.dc.secret.take() });
+                self.refresh_dc_sheets();
+            }
+            Act::DcRedo => {
+                self.layers.pop();
+                self.discord_setup();
+            }
+            Act::DcForget => self.layers.push(Layer::Dialog {
+                title: "Disconnect Discord?".into(),
+                body: "Sofa forgets the application and its sign-in.".into(),
+                opts: vec![Opt::new("Disconnect", Act::DcForgetNow).icon("close"), Opt::new("Cancel", Act::Close).icon("restart")],
+                focus: 1,
+            }),
+            Act::DcForgetNow => {
+                self.layers.retain(|l| !matches!(l, Layer::Dialog { .. } | Layer::Sheet { kind: SheetKind::DcAccount, .. }));
+                self.dc = DcSetup::default();
+                self.social.send(Req::Forget);
+            }
+            Act::DcJoin(id) => {
+                self.layers.retain(|l| !matches!(l, Layer::Sheet { kind: SheetKind::DcServer, .. }));
+                self.social.send(Req::Join(Some(id)));
+            }
+            Act::DcLeave => {
+                self.layers.retain(|l| !matches!(l, Layer::Sheet { kind: SheetKind::DcVoice, .. }));
+                self.social.send(Req::Join(None));
+            }
+            _ => {}
+        }
+        self.dirty = true;
+    }
+
+    fn focus_setup(&mut self, step: usize) {
+        self.refresh_dc_sheets();
+        if let Some(Layer::Sheet { focus, kind: SheetKind::DcSetup, .. }) = self.layers.last_mut() {
+            *focus = step;
+        }
+    }
+}
+
+/// A key press and release, as a remote (or keyboard) sends it, to the window in front.
+fn send_key(vk: u16) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::*;
+    let extended = matches!(VIRTUAL_KEY(vk), VK_UP | VK_DOWN | VK_LEFT | VK_RIGHT | VK_MEDIA_PLAY_PAUSE);
+    let flags = if extended { KEYEVENTF_EXTENDEDKEY } else { KEYBD_EVENT_FLAGS(0) };
+    let key = |up: bool| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(vk), wScan: 0, dwFlags: if up { flags | KEYEVENTF_KEYUP } else { flags }, time: 0, dwExtraInfo: platform::SOFA_MARK } },
+    };
+    // SAFETY: the inputs live on the stack for the call.
+    unsafe {
+        SendInput(&[key(false), key(true)], std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
 fn volume(up: bool) {
     use windows::Win32::UI::Input::KeyboardAndMouse::{KEYEVENTF_KEYUP, VK_VOLUME_DOWN, VK_VOLUME_UP, keybd_event};
     let k = if up { VK_VOLUME_UP } else { VK_VOLUME_DOWN };
     // SAFETY: synthesizing the media volume key.
     unsafe {
-        keybd_event(k.0 as u8, 0, Default::default(), 0);
-        keybd_event(k.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(k.0 as u8, 0, Default::default(), platform::SOFA_MARK);
+        keybd_event(k.0 as u8, 0, KEYEVENTF_KEYUP, platform::SOFA_MARK);
     }
 }
 
