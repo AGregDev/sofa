@@ -61,6 +61,18 @@ impl Action {
     }
 }
 
+/// How long everything stays up before a window chosen with a press takes the focus: Steam reads
+/// the same controller and may see the release a moment after Sofa does.
+const LET_GO_MS: f64 = 80.0;
+/// Held this long, a button may be stuck: the window comes forward anyway.
+const STUCK_MS: f64 = 3000.0;
+
+/// Whether a window chosen at `asked` may take the focus at `now`: everything has been up
+/// since `up` for a moment, or something stayed down so long it may be stuck.
+pub fn let_go(asked: f64, up: Option<f64>, now: f64) -> bool {
+    up.is_some_and(|u| now - u >= LET_GO_MS) || now - asked >= STUCK_MS
+}
+
 /// Standard gamepad button order (as the browser Gamepad API numbers them).
 const BUTTONS: [(usize, Action); 14] = [
     (0, Action::Accept),
@@ -113,6 +125,10 @@ pub struct Input {
     xconnected: [bool; 4],
     xprobe_at: f64,
     home_held: bool,
+    /// Keys Sofa reads that are down in its window (a WM_KEYDOWN whose WM_KEYUP has not come).
+    keys_down: Vec<u16>,
+    /// A button of the XInput pad is down (as of the last poll).
+    x_down: bool,
     /// The PS (Guide) button is Home. Off, only Create + Options (Back + Start) is, and the PS
     /// button is left to Steam or the Game Bar (Settings, "Home button").
     pub ps_home: bool,
@@ -148,6 +164,8 @@ impl Input {
             xconnected: [true; 4],
             xprobe_at: 0.0,
             home_held: false,
+            keys_down: Vec::new(),
+            x_down: false,
             ps_home: true,
             ds,
             lights,
@@ -250,6 +268,7 @@ impl Input {
         let ds = *self.ds.lock().unwrap_or_else(|e| e.into_inner());
         let hid = (ds.1.connected && now - ds.0.at < 1000.0).then_some(ds.0);
         let x = self.xinput(now);
+        self.x_down = x.is_some_and(|p| p.buttons.iter().any(|&b| b));
         // The pad in use drives the UI; the DualSense over HID wins while it is active.
         let pad = match (hid, x) {
             (Some(h), Some(xp)) if xp.buttons.iter().any(|&b| b) && !h.buttons.iter().any(|&b| b) => {
@@ -307,6 +326,32 @@ impl Input {
             self.held[i] = down;
         }
         out
+    }
+
+    /// A key Sofa reads went down or up in its window.
+    pub fn key_event(&mut self, vk: u16, down: bool) {
+        self.keys_down.retain(|&k| k != vk);
+        if down {
+            self.keys_down.push(vk);
+        }
+    }
+
+    /// Forgets the keys that are down: their WM_KEYUP goes to the window Sofa lost the focus to.
+    pub fn keys_released(&mut self) {
+        self.keys_down.clear();
+    }
+
+    /// Whether a button or key from a press may still be down: a key in Sofa's window, or any
+    /// controller button (unless `keys_only`: a QA run ignores the controllers).
+    pub fn anything_down(&self, now: f64, keys_only: bool) -> bool {
+        if !self.keys_down.is_empty() {
+            return true;
+        }
+        if keys_only {
+            return false;
+        }
+        let (pad, info) = self.ds.lock().map(|g| *g).unwrap_or_default();
+        (info.connected && now - pad.at < 1000.0 && pad.buttons.iter().any(|&b| b)) || self.x_down
     }
 
     /// Whether a direction is held (the loop must keep waking for its repeats).
@@ -607,6 +652,14 @@ fn dualsense_thread(shared: Arc<Mutex<(Pad, PadInfo)>>, wanted: Arc<Mutex<Lights
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chosen_window_waits_for_the_press_to_end() {
+        assert!(!let_go(0.0, None, 500.0), "still held");
+        assert!(!let_go(0.0, Some(120.0), 150.0), "released a moment ago");
+        assert!(let_go(0.0, Some(120.0), 200.0), "released 80 ms ago");
+        assert!(let_go(0.0, None, 3000.0), "held 3 s: stuck");
+    }
 
     #[test]
     fn crc32_matches_the_standard_check_value() {

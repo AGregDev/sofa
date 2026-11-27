@@ -68,9 +68,14 @@ function Fingerprint {
 $VK = @{ Left = 0x25; Up = 0x26; Right = 0x27; Down = 0x28; Enter = 0x0D; Esc = 0x1B; Back = 0x08; Home = 0x24;
          E = 0x45; Q = 0x51; O = 0x4F; M = 0x4D; F = 0x46; VolUp = 0xBB; VolDown = 0xBD }
 
+# A key-up with the flags of a real one (previous state down, released): with lParam 0 it reads as
+# a press, and TranslateMessage types its letter.
+$KeyUp = [IntPtr][int64]3221225473
+
 function Key([string]$k, [int]$times = 1, [int]$wait = 260) {
   for ($i = 0; $i -lt $times; $i++) {
     [QaWin]::PostMessage($script:h, 0x0100, [IntPtr]$VK[$k], [IntPtr]0) | Out-Null
+    [QaWin]::PostMessage($script:h, 0x0101, [IntPtr]$VK[$k], $KeyUp) | Out-Null
     Start-Sleep -Milliseconds $wait
   }
 }
@@ -349,6 +354,14 @@ $s = State
 Check 'R2 Triangle on Running opens its menu' ($s.layer -like 'sheet:*:0' -and $s.layer -ne 'sheet:Settings:0') $s.layer
 Shot '14-running-menu' 400
 Key Esc
+# A game given the focus with the button still down reads a fresh press (the character jumped):
+# the app comes forward only once the key is up.
+[QaWin]::PostMessage($script:h, 0x0100, [IntPtr]$VK['Enter'], [IntPtr]0) | Out-Null
+Start-Sleep -Milliseconds 500
+Check 'R4 Select held on Running: the app waits for the release' ((State).resume -eq "wait:$([int64]$win)") (State).resume
+[QaWin]::PostMessage($script:h, 0x0101, [IntPtr]$VK['Enter'], $KeyUp) | Out-Null
+Start-Sleep -Milliseconds 400
+Check 'R5 Released, the app comes forward' ((State).resume -eq "done:$([int64]$win)") (State).resume
 Stop-Process -Id $stand.Id -Force
 Start-Sleep -Milliseconds 400
 Key Home  # PS on Home: the quick menu opens, and Running drops apps that closed

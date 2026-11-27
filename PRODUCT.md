@@ -58,7 +58,8 @@ to start a game or switch apps.
 - Running cards name the program itself (Firefox, not the page it shows) with its
   own icon; the page or document shows beside "Running" in the hero.
 - PS button home with the running app first; resume, close, force close; switch
-  prompt when starting a second game.
+  prompt when starting a second game. A game comes forward once ✕ is let go, so it
+  never reads the press; one already open resumes from its tile too.
 - Stays in front: the desktop, taskbar, Start menu and Search showing up bring
   Sofa back; a full-screen game closing brings Sofa back. Go to desktop rests this
   until the PS button.

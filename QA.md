@@ -71,6 +71,8 @@ writes `shots\qa.txt`. Exit code 0 means every check passed.
 | R1 | PS from an app adds a Running card, first and focused |
 | R2 | Triangle on Running opens its menu (Resume, Close, Force close) |
 | R3 | A closed app loses its card (PS on Home checks the cards before the quick menu opens) |
+| R4 | Select held on a Running card: the app waits until it is released |
+| R5 | Released, the app comes forward (a game given the focus with ✕ down reads a fresh press) |
 | O1 | A second start hands over to the first and exits |
 | P1 | Memory on Home under 150 MB |
 | P2 | Idle CPU under 1 % of a core |
@@ -151,8 +153,26 @@ These need a person, a TV and a controller.
 | M22 | ✕ on a playlist plays it in the Spotify app on this PC, starting Spotify when it is closed; Sofa stays in front |
 | M23 | With Steam open (desktop layout on), ○ on Home goes back and never opens the focused tile, on a DualSense and on an Xbox pad |
 | M24 | Xbox pad: the first-run screen and Settings offer "Keep Game Bar off the Xbox button"; with it on, the Xbox button opens Sofa and not Game Bar; off again, Game Bar opens as before |
+| M25 | A game in the background (Assassin's Creed IV): ✕ on its Running card, Resume in its menu, and Stay awake on the sleep warning bring it back without the game reading the press (the character does not jump) |
 
 ## Results
+
+### 2.2.1 (2026-11-27)
+
+- Automated UI run: 73 of 73 PASS (new: R4 and R5; QA key presses now end with a key-up, and a
+  run no longer drops its own keys while someone plays with a controller). Home: 68.5 MB
+  working set, 91.9 MB private, 18 threads, 0 % idle CPU; 17.4 MB after giving memory back;
+  first frame in 100 ms.
+- Unit tests and `cargo clippy --workspace --all-targets`: all PASS, no warnings. The opt-in
+  input tests were not rerun (the hold did not change).
+- M25 on the TV, with a DualSense and Assassin's Creed Black Flag Resynced: ✕ on its tile (the
+  game open, no card yet) and ✕ on its Running card after PS brought Sofa back. The game came
+  forward 200 ms and 166 ms after the press, and the character did not jump. Resume in the △
+  menu and Stay awake take the same path but were not walked. M1 to M24: not walked.
+- Build, install: B1 to B3 PASS. `dist\Sofa-Setup-2.2.1.exe` (2.1 MB, version resource 2.2.1)
+  replaced the installed 2.2.0: Installed apps shows 2.2.1, the Start menu shortcut and the
+  start-with-Windows entry point at the installed file, and Sofa 2.2.1 started from it. B4 not
+  rerun.
 
 ### 2.2.0 (2026-11-27)
 

@@ -93,6 +93,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File qa\qa.ps1   # automated QA, 
   are never called (made-up devices in `AudioState::qa`), the `media` thread does not run (a
   made-up track), the lights are never armed and the sleep timer never calls
   `platform::sleep`.
+- **Hand the screen over on release.** A game given the focus while ✕ is still down reads a fresh
+  press (Assassin's Creed IV jumped), and so does Steam Input switching from its desktop layout
+  to the game's. `App::resume` waits until no controller button and no key Sofa reads is down
+  (80 ms after, `input::let_go`; after 3 s it goes anyway) before `platform::focus`. Bring other
+  windows forward from a press only through it. ✕ on a library tile whose program is open
+  already (`App::window_of`) resumes it too, instead of asking Steam to switch.
 - **The PS button.** The DualSense thread posts `WM_PAD_HOME` (wparam 0 PS, 1 Create +
   Options) even while a game has focus; XInput's Guide comes from `poll`. Both go through
   `home_button`, which drops duplicates within 350 ms. With "Home button: Create +

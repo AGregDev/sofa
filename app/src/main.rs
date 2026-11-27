@@ -151,6 +151,7 @@ fn ours(msg: u32) -> bool {
         msg,
         WM_KEYDOWN
             | WM_SYSKEYDOWN
+            | WM_KEYUP
             | WM_CHAR
             | WM_SIZE
             | WM_ACTIVATEAPP
@@ -187,6 +188,9 @@ fn handle(hwnd: HWND, msg: u32, w: usize, l: isize) -> Option<LRESULT> {
         WM_KEYDOWN | WM_SYSKEYDOWN => {
             let vk = VIRTUAL_KEY(w as u16);
             let repeat = l & (1 << 30) != 0;
+            if msg == WM_KEYDOWN && key_action(vk).is_some() {
+                with_app(|app| app.input.key_event(vk.0, true));
+            }
             // SAFETY: plain query.
             let ctrl = unsafe { GetKeyState(i32::from(VK_CONTROL.0)) } < 0;
             if with_app(|app| app.text_mode()).unwrap_or(false) {
@@ -228,13 +232,20 @@ fn handle(hwnd: HWND, msg: u32, w: usize, l: isize) -> Option<LRESULT> {
             let dir = matches!(action, Action::Up | Action::Down | Action::Left | Action::Right);
             if !repeat || dir {
                 with_app(|app| {
-                    if let Some(a) = app.input.key(action, t) {
+                    // A QA run reads only its own keys: someone playing with the controller during
+                    // the run must not make it drop them as that pad's presses.
+                    if let Some(a) = if app.qa { Some(action) } else { app.input.key(action, t) } {
                         app.action(a, t);
                     }
                     log_state(app);
                 });
             }
             Some(LRESULT(0))
+        }
+        // A window chosen with a key comes forward once the key is up (`App::resume`).
+        WM_KEYUP => {
+            with_app(|app| app.input.key_event(w as u16, false));
+            None
         }
         WM_CHAR => {
             let c = char::from_u32(w as u32)?;
@@ -646,7 +657,7 @@ fn main() -> Result<()> {
                 // While Sofa's launch screen covers a starting browser, it keeps animating.
                 let live = focused || app.qa || app.shell.covering();
                 let draw = visible && if live { anim } else { app.dirty };
-                let busy = app.input.holding() || app.shell.busy();
+                let busy = app.input.holding() || app.shell.busy() || app.resume_waiting();
                 let wait = match (live || remote, app.input.xinput_active()) {
                     (true, true) => 16,
                     (true, false) => 250,

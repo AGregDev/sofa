@@ -10,7 +10,7 @@ the PS button always takes you home, and Windows stays out of sight until you le
 
 [![Release](https://img.shields.io/github/v/release/AGregDev/sofa?style=flat-square&color=f0a24b&labelColor=1c1a18)](https://github.com/AGregDev/sofa/releases/latest)
 [![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-efe9de?style=flat-square&labelColor=1c1a18)](#install)
-[![QA](https://img.shields.io/badge/QA-71%2F71%20passing-efe9de?style=flat-square&labelColor=1c1a18)](QA.md)
+[![QA](https://img.shields.io/badge/QA-73%2F73%20passing-efe9de?style=flat-square&labelColor=1c1a18)](QA.md)
 [![Memory](https://img.shields.io/badge/memory-~60%20MB-efe9de?style=flat-square&labelColor=1c1a18)](#small-and-fast)
 [![License: MIT](https://img.shields.io/badge/license-MIT-efe9de?style=flat-square&labelColor=1c1a18)](LICENSE)
 
@@ -91,7 +91,7 @@ off the main thread at the size it is drawn. Checked on every release by an auto
 
 ## Install
 
-1. Download **Sofa-Setup-2.2.0.exe** from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa. It replaces Sofa 1.x and keeps your settings.
+1. Download **Sofa-Setup-2.2.1.exe** from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa. It replaces Sofa 1.x and keeps your settings.
 2. On the first screen, choose whether Sofa starts with Windows and keeps Steam off the PS button (with an Xbox controller: also Game Bar off the Xbox button), then **Continue**.
 3. Steam also listens to the PS button. Sofa turns off Steam's **Guide button focuses Steam** for you: by itself when Steam is closed, or after asking when Steam is open (Steam restarts in the background). You can turn this off in Settings.
 
@@ -138,7 +138,7 @@ cargo build --release
 | `powershell -ExecutionPolicy Bypass -File qa\qa.ps1` | Automated QA: drives every screen, checks memory and CPU, writes `shots\qa.txt` |
 | `sofa.exe --windowed` | Runs in a window instead of full screen (`--log` writes `%TEMP%\sofa-native.log`) |
 
-Copy `sofa.exe` to a name containing "setup" (`Sofa-Setup-2.2.0.exe`) and it installs itself.
+Copy `sofa.exe` to a name containing "setup" (`Sofa-Setup-2.2.1.exe`) and it installs itself.
 
 ## How it works
 

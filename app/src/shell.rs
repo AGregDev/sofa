@@ -222,6 +222,11 @@ fn is_fullscreen(h: isize) -> bool {
 
 /// The first visible, titled top-level window of a program (`discord.exe`).
 pub fn find_window(exe: &str) -> Option<isize> {
+    top_windows().into_iter().find(|&h| exe_name(h) == exe)
+}
+
+/// The visible, titled top-level windows, front to back.
+pub fn top_windows() -> Vec<isize> {
     unsafe extern "system" fn each(h: HWND, l: LPARAM) -> windows::core::BOOL {
         // SAFETY: `l` is the Vec passed below, alive for the whole enumeration.
         let list = unsafe { &mut *(l.0 as *mut Vec<isize>) };
@@ -236,7 +241,7 @@ pub fn find_window(exe: &str) -> Option<isize> {
     unsafe {
         let _ = EnumWindows(Some(each), LPARAM(&mut all as *mut Vec<isize> as isize));
     }
-    all.into_iter().find(|&h| exe_name(h) == exe)
+    all
 }
 
 pub fn alive(h: isize) -> bool {

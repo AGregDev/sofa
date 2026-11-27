@@ -4,7 +4,7 @@
 
 use crate::audio;
 use crate::gfx::{Color, Gfx};
-use crate::input::{Action, Input, Lights, PadKind};
+use crate::input::{self, Action, Input, Lights, PadKind};
 use crate::library::{self, Item, Launch};
 use crate::media::{self, NowPlaying};
 use crate::shell::{self, Shell, Window};
@@ -520,6 +520,10 @@ pub struct App {
     /// The one-minute warning is up; it came over this window (resumed on Stay awake).
     sleep_warned: bool,
     sleep_from: Option<isize>,
+    /// A Running window chosen with a press, waiting for it to be released (window, when it
+    /// was chosen, since when nothing is down), and the last one that came forward.
+    resume_wait: Option<(isize, f64, Option<f64>)>,
+    resumed: Option<isize>,
     /// Seconds left as last drawn (the top bar's minutes, the warning's countdown).
     sleep_shown: i64,
     /// The colour Sofa gives the DualSense's lightbar while it is in front.
@@ -619,6 +623,8 @@ impl App {
             sleep_at: None,
             sleep_warned: false,
             sleep_from: None,
+            resume_wait: None,
+            resumed: None,
             sleep_shown: -1,
             light_rgb: (0, 0, 0),
             media,
@@ -1194,22 +1200,44 @@ impl App {
                 self.set_tab(&cat, now);
             }
             Some(Tile::Item(i)) => self.open_item(i, now),
-            Some(Tile::Running(h)) => self.resume(h),
+            Some(Tile::Running(h)) => self.resume(h, now),
             Some(Tile::Social(s)) => self.social_action(s, now),
             Some(Tile::Music(m)) => self.music_action(m),
             None => {}
         }
     }
 
-    fn resume(&mut self, h: isize) {
+    /// Brings a Running window forward once the button (or key) that chose it is up: a game
+    /// given the focus with ✕ still down reads it as a fresh press (the character jumps), and so
+    /// does Steam Input switching from its desktop layout to the game's.
+    fn resume(&mut self, h: isize, now: f64) {
         if self.run_of(h).is_none() {
             return;
         }
         sound::play(Sound::Select);
-        if !self.qa {
+        self.resume_wait = Some((h, now, None));
+    }
+
+    fn resume_tick(&mut self, now: f64) {
+        let Some((h, at, up)) = self.resume_wait else { return };
+        let up = if self.input.anything_down(now, self.qa) { None } else { Some(up.unwrap_or(now)) };
+        if !input::let_go(at, up, now) {
+            self.resume_wait = Some((h, at, up));
+            return;
+        }
+        self.resume_wait = None;
+        self.resumed = Some(h);
+        crate::log(&format!("resume {h:#x} after {:.0} ms", now - at));
+        if !self.qa && self.run_of(h).is_some() {
             self.shell.hand_off();
             platform::focus(windows::Win32::Foundation::HWND(h as *mut _));
         }
+        crate::log(&self.state_line());
+    }
+
+    /// A window waits for its press to end (the loop keeps waking to check).
+    pub fn resume_waiting(&self) -> bool {
+        self.resume_wait.is_some()
     }
 
     fn open_item(&mut self, i: usize, now: f64) {
@@ -1219,20 +1247,19 @@ impl App {
         }
         // Like a console: picking something that is already running resumes it.
         if let Some(h) = self.running.iter().find(|r| r.item == Some(i)).map(|r| r.win.hwnd) {
-            return self.resume(h);
+            return self.resume(h, now);
         }
-        // Open without a card (started before Sofa, or from the desktop): switch to its window
-        // instead of starting a second copy. Some apps answer a second start badly (Spotify asks
-        // to force-close itself when its first copy is slow to reply).
+        // Open without a card (started before Sofa, from Steam or the desktop): switch to its
+        // window instead of starting it again. Some apps answer a second start badly (Spotify asks
+        // to force-close itself when its first copy is slow to reply), and Steam answers a game
+        // that runs already by switching to it while ✕ is still down.
         if !self.qa
-            && let Launch::AppsFolder(id) = &it.launch
-            && let Some(name) = std::path::Path::new(id).file_name().map(|n| n.to_string_lossy().to_lowercase()).filter(|n| n.ends_with(".exe"))
-            && let Some(h) = shell::find_window(&name)
+            && let Some(h) = self.window_of(&it)
         {
             if self.add_running(shell::window(h), false) && !self.layers_hold_items() {
                 self.rebuild(true);
             }
-            return self.resume(h);
+            return self.resume(h, now);
         }
         // One game at a time, unless the person wants both.
         let other = self.running.iter().find(|r| r.item.is_some_and(|j| self.items[j].category == "games")).map(|r| r.win.hwnd);
@@ -1254,6 +1281,17 @@ impl App {
             return;
         }
         self.start(i, now);
+    }
+
+    /// The open window of a library item that has no Running card: an app's own program, or a
+    /// program in a game's folder.
+    fn window_of(&self, it: &Item) -> Option<isize> {
+        if let Launch::AppsFolder(id) = &it.launch {
+            let name = std::path::Path::new(id).file_name().map(|n| n.to_string_lossy().to_lowercase()).filter(|n| n.ends_with(".exe"))?;
+            return shell::find_window(&name);
+        }
+        let dir = format!("{}\\", it.install_path.as_ref()?);
+        shell::top_windows().into_iter().find(|&h| h != self.shell.sofa && shell::exe_of(shell::pid(h)).to_lowercase().starts_with(&dir))
     }
 
     fn start(&mut self, i: usize, now: f64) {
@@ -1892,7 +1930,7 @@ impl App {
             }
             Act::Resume(h) => {
                 self.layers.pop();
-                self.resume(h);
+                self.resume(h, now);
             }
             Act::CloseRun(h) | Act::KillRun(h) => {
                 self.layers.pop();
@@ -1968,7 +2006,7 @@ impl App {
                 self.sleep_warned = false;
                 self.toast("Sleep timer off", "The PC stays on.");
                 if let Some(h) = self.sleep_from.take() {
-                    self.resume(h);
+                    self.resume(h, now);
                 }
             }
             Act::SleepNow => {
@@ -2127,6 +2165,10 @@ impl App {
             }
         } else {
             self.unfocused_at = Some(now);
+            // Something else took the screen first: nothing comes forward over it, and the keys
+            // that were down come up in that window.
+            self.resume_wait = None;
+            self.input.keys_released();
         }
         self.dirty = true;
     }
@@ -2232,6 +2274,7 @@ impl App {
             self.dirty = true;
         }
         self.watch_pads(now);
+        self.resume_tick(now);
         self.sleep_tick(now);
         self.lights_tick(now);
         let m = self.motion() > 0.0;
@@ -2266,7 +2309,7 @@ impl App {
             Some(Layer::Quick { focus, .. }) => format!("quick:{}", focus.key()),
         };
         format!(
-            "state|tab={}|focus={},{}|tile={}|layer={}|rows={}|items={}|running={}|toast={}|sleep={}|volume={}|output={}|mic={}|music={}|rowkeys={}",
+            "state|tab={}|focus={},{}|tile={}|layer={}|rows={}|items={}|running={}|toast={}|sleep={}|volume={}|output={}|mic={}|music={}|resume={}|rowkeys={}",
             self.tab,
             self.focus.0,
             self.focus.1,
@@ -2281,6 +2324,11 @@ impl App {
             self.audio.current.as_deref().unwrap_or("-"),
             if self.mic_muted() { "muted" } else { "on" },
             self.playing.as_ref().map_or("-", |p| if p.playing { "playing" } else { "paused" }),
+            match (self.resume_wait, self.resumed) {
+                (Some((h, ..)), _) => format!("wait:{h}"),
+                (None, Some(h)) => format!("done:{h}"),
+                (None, None) => "-".to_owned(),
+            },
             self.rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>().join(",")
         )
     }

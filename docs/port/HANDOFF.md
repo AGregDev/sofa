@@ -3,15 +3,30 @@
 Where Sofa stands, for the next session. Read [MAP.md](MAP.md) first, then the ADRs it
 points to, then `../../CLAUDE.md`.
 
-## State (2026-11-27, 2.2.0 released)
+## State (2026-11-27, 2.2.1 released)
 
-- Sofa 2.2.0 is the native app only (ADR-008), released from `main` as v2.2.0. It passes the
-  automated QA run (71 checks), `cargo test --workspace` and
-  `cargo clippy --workspace --all-targets` with no warnings. The manual checks (M1 to M24)
-  were not walked for 2.1.0 or 2.2.0.
+- Sofa 2.2.1 is the native app only (ADR-008), released from `main` as v2.2.1. It passes the
+  automated QA run (73 checks), `cargo test --workspace` and
+  `cargo clippy --workspace --all-targets` with no warnings. Of the manual checks only M25 was
+  walked (on the TV, for 2.2.1); M1 to M24 were not walked for 2.1.0, 2.2.0 or 2.2.1.
 - It installs itself (`Sofa-Setup-<version>.exe`), replaces Sofa 1.x keeping
   `%APPDATA%\sofa`, and uninstalls from Installed apps (`Sofa.exe --uninstall`).
 - The 1.x features still missing are listed in `../../PRODUCT.md`, "Not yet in 2.x".
+
+## New in 2.2.1
+
+- **Resuming hands the screen over on release** (`App::resume`, `resume_tick`,
+  `input::let_go`). Switching to a game on the ✕ press let it read ✕ as a fresh press
+  (Assassin's Creed IV jumped; Steam Input also changes from its desktop layout to the game's
+  as the game comes forward). The window now takes the focus 80 ms after no controller button
+  and no key Sofa reads is down (`Input::anything_down`; keys tracked from WM_KEYDOWN and
+  WM_KEYUP), or after 3 s if something stays down. Sofa losing the focus first cancels it.
+- ✕ on a library tile whose program is open already resumes it (`App::window_of`: an app's
+  own program, or a window whose program is in a game's folder), so Steam no longer does the
+  switch with ✕ still down.
+- QA: `Key` posts a key-up with a real key-up's flags (with lParam 0, TranslateMessage types
+  its letter); R4 and R5 cover the wait; a QA run no longer drops its own keys while someone
+  plays with a controller (`Input::key`'s pad filter is skipped in QA mode).
 
 ## New in 2.2.0
 
