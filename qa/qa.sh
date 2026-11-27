@@ -203,6 +203,28 @@ key Enter
 state
 c 'U13 Stay awake turns the timer off' '[ "${S[sleep]:-}" = off ] && [ "${S[layer]:-}" = none ]' "sleep ${S[sleep]:-}, ${S[layer]:-}"
 
+# ---------- Performance (quick menu) ----------
+# Memory and video memory are read from this computer (nothing changes); the overlay is Sofa's own.
+key Home
+key Right 6
+key Enter
+state
+c 'U14 Performance shows memory, video memory and the frame rate' '[ "${S[layer]:-}" = "sheet:Performance:0" ]' "${S[layer]:-}"
+shot 22-performance 900
+key Enter
+c 'U15 The performance overlay switches on (saved)' '[ "$(setting .settings.perfOverlay)" = true ]' "$(setting .settings.perfOverlay)"
+key Esc
+key Home
+shot 23-performance-overlay 1200
+key Home
+key Right 6
+key Enter
+key Enter
+key Esc
+key Home
+state
+c 'U16 and off again' '[ "$(setting .settings.perfOverlay)" = false ] && [ "${S[layer]:-}" = none ]' "$(setting .settings.perfOverlay), ${S[layer]:-}"
+
 # ---------- Tabs ----------
 TABS=""
 for _ in $(seq 1 7); do

@@ -235,6 +235,8 @@ pub struct Gfx {
     /// Masks for the clips last used (the same few rectangles every frame).
     masks: Vec<(Rect, sk::Mask)>,
     text: Text,
+    /// Glyph coverage brightened as DirectWrite's contrast does (`text::contrast_table`).
+    contrast: [u8; 256],
     icons: HashMap<(&'static str, bool), Option<sk::Path>>,
     images: HashMap<ImageKey, Slot>,
     /// Each decoded image's most vivid colour (kept when the images go: a few bytes each).
@@ -271,6 +273,7 @@ impl Gfx {
             clips: Vec::new(),
             masks: Vec::new(),
             text: Text::new(font),
+            contrast: crate::linux::text::contrast_table(),
             icons: HashMap::new(),
             images: HashMap::new(),
             tones: HashMap::new(),
@@ -489,6 +492,7 @@ impl Gfx {
         let ch = |v: f32| mul((v.clamp(0.0, 1.0) * 255.0).round() as u32, a);
         let col = [ch(c.2), ch(c.1), ch(c.0), a];
         let stride = pw as usize * 4;
+        let contrast = self.contrast;
         for line in &layout.lines {
             let base_y = (y + line.baseline).round() as i32;
             for g in &line.glyphs {
@@ -521,7 +525,7 @@ impl Gfx {
                             data[i + 2] = (mul(r, sa) + mul(u32::from(data[i + 2]), inv)).min(255) as u8;
                             data[i + 3] = (sa + mul(u32::from(data[i + 3]), inv)).min(255) as u8;
                         } else {
-                            let m = u32::from(img.data[row + (px - left) as usize]);
+                            let m = u32::from(contrast[usize::from(img.data[row + (px - left) as usize])]);
                             if m == 0 {
                                 continue;
                             }

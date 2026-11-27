@@ -65,6 +65,7 @@ struct Hero {
 
 impl App {
     pub fn draw(&mut self, now: f64) {
+        let started = std::time::Instant::now();
         self.dirty = false;
         self.gfx.begin(now);
         self.gfx.clear(BG);
@@ -79,10 +80,44 @@ impl App {
         self.draw_layers(now);
         self.draw_toast(now);
         self.draw_splash(now);
+        if self.store.flag("perfOverlay") {
+            self.draw_perf(now);
+        }
+        // The time this frame took to draw (not the wait for the screen).
+        self.frames.record(now, started.elapsed().as_secs_f32() * 1000.0);
         if self.gfx.end().is_err() {
             self.draw_errors += 1;
         } else {
             self.draw_errors = 0;
+        }
+    }
+
+    /// The performance overlay: Sofa's frame rate, memory and video memory, top left, over
+    /// everything (Performance in the quick menu turns it on).
+    fn draw_perf(&mut self, now: f64) {
+        let r = self.rem();
+        let size = 0.875 * r;
+        let mut lines: Vec<(String, String)> = vec![("Sofa".into(), self.fps_text(now))];
+        if let Some(u) = self.perf.clone() {
+            if u.ram_total > 0 {
+                lines.push(("Memory".into(), crate::perf::of(u.ram_used, u.ram_total)));
+            }
+            for g in u.gpus.iter().take(2) {
+                lines.push(("Video memory".into(), g.used.map_or_else(|| format!("{} in all", crate::perf::gb(g.total)), |used| crate::perf::of(used, g.total))));
+            }
+            lines.push(("Sofa's memory".into(), crate::perf::mb(u.sofa)));
+        }
+        let label_w = lines.iter().map(|(l, _)| self.gfx.measure(l, size, 400).0).fold(0.0, f32::max);
+        let value_w = lines.iter().map(|(_, v)| self.gfx.measure(v, size, 500).0).fold(0.0, f32::max);
+        let line_h = 1.5 * size;
+        let pad = 0.75 * r;
+        let rect = Rect::new(4.0 * r, 5.25 * r, label_w + value_w + 1.5 * r + 2.0 * pad, line_h * lines.len() as f32 + 2.0 * pad - (line_h - size * 1.33));
+        self.gfx.fill(rect, DEEP.alpha(0.88), 0.5 * r);
+        self.gfx.stroke(rect.inset(0.5), LINE, 0.5 * r, 1.0);
+        for (i, (label, value)) in lines.iter().enumerate() {
+            let y = rect.y + pad + i as f32 * line_h;
+            self.gfx.text(label, rect.x + pad, y, label_w + 4.0, size, 400, T2, Align::Left, 0, 0.0);
+            self.gfx.text(value, rect.x + pad + label_w + 1.5 * r, y, value_w + 4.0, size, 500, T1, Align::Left, 0, 0.0);
         }
     }
 

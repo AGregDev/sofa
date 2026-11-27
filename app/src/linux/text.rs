@@ -2,6 +2,12 @@
 //! shaped and rasterized with swash, laid out the way DirectWrite lays out Sofa's text on
 //! Windows: one line trimmed with an ellipsis, or wrapped at spaces into at most `lines` lines of
 //! 1.2 em with an ellipsis on the last one.
+//!
+//! Sofa's look was made with DirectWrite, which draws Figtree (a variable font) its own way:
+//! measured on Windows 11 (widths at three sizes, `dw_weight`), Sofa's 400 is the weight axis at
+//! 350, its 500 and 600 are 300 with DirectWrite's bold simulation, its 700 is 650 with it; the
+//! first baseline of a line sits 1.0791 em down and a line is 1.3301 em high. The same is done
+//! here, so text has the same weight, width and place on both systems.
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -12,6 +18,37 @@ use swash::zeno::{Format, Vector};
 use swash::{CacheKey, FontRef};
 
 use crate::draw::Align;
+
+/// The weight axis value and bold simulation DirectWrite uses for a weight Sofa asks for.
+fn dw_weight(weight: u32) -> (f32, bool) {
+    match weight {
+        0..=349 => (300.0, false),
+        350..=449 => (350.0, false),
+        450..=649 => (300.0, true),
+        650..=749 => (650.0, true),
+        _ => (900.0, true),
+    }
+}
+
+/// DirectWrite's bold simulation: outlines widened, and each advance lengthened, by this much
+/// of the size.
+const BOLD_EM: f32 = 0.0197;
+/// DirectWrite's single line: baseline and height, in ems of the size.
+const DW_BASELINE: f32 = 1.0791;
+const DW_HEIGHT: f32 = 1.3301;
+/// Partial coverage brightened as DirectWrite's grayscale contrast does (`c * (k + 1) / (c * k
+/// + 1)`), so thin strokes read as they do on Windows.
+const CONTRAST: f32 = 0.8;
+
+/// Coverage after DirectWrite-like contrast, for each 8-bit value.
+pub fn contrast_table() -> [u8; 256] {
+    let mut t = [0u8; 256];
+    for (i, v) in t.iter_mut().enumerate() {
+        let c = i as f32 / 255.0;
+        *v = (c * (CONTRAST + 1.0) / (c * CONTRAST + 1.0) * 255.0).round() as u8;
+    }
+    t
+}
 
 enum Data {
     Static(&'static [u8]),
@@ -111,33 +148,12 @@ pub struct Text {
     scaler: ScaleContext,
     glyphs: HashMap<GlyphKey, Option<Glyph>>,
     layouts: HashMap<LayoutKey, (Rc<Layout>, u64)>,
-    /// Figtree's ascent and line height per em.
-    ascent: f32,
-    natural: f32,
 }
 
 impl Text {
     pub fn new(figtree: &'static [u8]) -> Text {
         let faces: Vec<Face> = Face::new(Data::Static(figtree), 0).into_iter().collect();
-        let (ascent, natural) = faces
-            .first()
-            .map(|f| {
-                let m = f.font().metrics(&[]);
-                let em = f32::from(m.units_per_em.max(1));
-                (m.ascent / em, (m.ascent + m.descent + m.leading) / em)
-            })
-            .unwrap_or((0.95, 1.2));
-        Text {
-            faces,
-            fallback: HashMap::new(),
-            loaded: HashSet::new(),
-            shaper: ShapeContext::new(),
-            scaler: ScaleContext::new(),
-            glyphs: HashMap::new(),
-            layouts: HashMap::new(),
-            ascent,
-            natural,
-        }
+        Text { faces, fallback: HashMap::new(), loaded: HashSet::new(), shaper: ShapeContext::new(), scaler: ScaleContext::new(), glyphs: HashMap::new(), layouts: HashMap::new() }
     }
 
     /// Drops what was not drawn for a while (`all`: everything, giving memory back).
@@ -181,6 +197,9 @@ impl Text {
     }
 
     fn shape(&mut self, text: &str, size: f32, weight: u32, tracking: f32) -> Shaped {
+        // DirectWrite's bold simulation lengthens every glyph's advance.
+        let (wght, simulated) = dw_weight(weight);
+        let bold = if simulated { BOLD_EM * size } else { 0.0 };
         // Runs of one face each.
         let mut runs: Vec<(usize, usize, usize)> = Vec::new();
         for (i, c) in text.char_indices() {
@@ -196,7 +215,7 @@ impl Text {
             let f = &self.faces[face];
             let mut shaper = self.shaper.builder(f.font()).size(size);
             if f.wght {
-                shaper = shaper.variations([("wght", weight as f32)]);
+                shaper = shaper.variations([("wght", wght)]);
             }
             let mut shaper = shaper.build();
             shaper.add_str(run);
@@ -209,7 +228,7 @@ impl Text {
                 let mut adv = 0.0;
                 for gl in c.glyphs {
                     g.push(Placed { face: face as u16, id: gl.id, x: adv + gl.x, y: gl.y });
-                    adv += gl.advance;
+                    adv += gl.advance + bold;
                 }
                 let newline = src.contains('\n');
                 if !newline && !src.is_empty() {
@@ -289,7 +308,7 @@ impl Text {
         let cut = ranges.len() > max;
         ranges.truncate(max);
         let line_h = size * 1.2;
-        let mut out = Layout { lines: Vec::new(), width: 0.0, height: if lines == 0 { size * self.natural } else { line_h * ranges.len() as f32 } };
+        let mut out = Layout { lines: Vec::new(), width: 0.0, height: if lines == 0 { size * DW_HEIGHT } else { line_h * ranges.len() as f32 } };
         let count = ranges.len();
         for (n, (s, mut e)) in ranges.into_iter().enumerate() {
             let full: f32 = cl[s..e].iter().map(|c| c.adv).sum();
@@ -339,7 +358,7 @@ impl Text {
                 Align::Center => (room - visible) / 2.0,
                 Align::Right => room - visible,
             };
-            let baseline = if lines == 0 { size * self.ascent } else { n as f32 * line_h + line_h * 0.8 };
+            let baseline = if lines == 0 { size * DW_BASELINE } else { n as f32 * line_h + line_h * 0.8 };
             out.width = out.width.max(if trim { pen } else { with_spaces });
             out.lines.push(Line { glyphs, x, baseline });
         }
@@ -351,16 +370,18 @@ impl Text {
     /// A glyph rasterized at `size` with its pen `fx` quarter pixels right of a whole pixel.
     pub fn glyph(&mut self, face: u16, id: u16, size: f32, weight: u32, fx: u8) -> Option<&Glyph> {
         let f = self.faces.get(face as usize)?;
-        let key = (face, id, (size * 16.0).round() as u32, if f.wght { weight as u16 } else { 0 }, fx);
+        let (wght, bold) = dw_weight(weight);
+        let key = (face, id, (size * 16.0).round() as u32, wght as u16 + u16::from(bold), fx);
         if !self.glyphs.contains_key(&key) {
             let mut builder = self.scaler.builder(f.font()).size(size).hint(false);
             if f.wght {
-                builder = builder.variations([("wght", weight as f32)]);
+                builder = builder.variations([("wght", wght)]);
             }
             let mut scaler = builder.build();
             let image = Render::new(&[Source::ColorOutline(0), Source::ColorBitmap(StrikeWith::BestFit), Source::Outline])
                 .format(Format::Alpha)
                 .offset(Vector::new(f32::from(fx) / 4.0, 0.0))
+                .embolden(if bold { BOLD_EM * size } else { 0.0 })
                 .render(&mut scaler, id);
             let g = image.filter(|i| i.placement.width > 0 && i.placement.height > 0).map(|i| Glyph {
                 left: i.placement.left,
@@ -400,7 +421,7 @@ mod tests {
         let cut = t.layout("Assassin's Creed IV Black Flag", 20.0, 600, 120.0, 0, Align::Left, 0.0, 0);
         assert!(cut.width <= 120.5, "{}", cut.width);
         assert!(cut.lines[0].glyphs.len() < full.lines[0].glyphs.len());
-        assert!((full.height - 24.0).abs() < 0.6, "Figtree's line is 1.2 em: {}", full.height);
+        assert!((full.height - 20.0 * DW_HEIGHT).abs() < 0.01, "a line is as high as DirectWrite's: {}", full.height);
     }
 
     #[test]
@@ -428,5 +449,23 @@ mod tests {
         let g = l.lines[0].glyphs[0];
         let img = t.glyph(g.face, g.id, 32.0, 700, 0).expect("A has an outline");
         assert!(img.w > 10 && img.h > 10 && img.data.iter().any(|&b| b > 200));
+    }
+
+    #[test]
+    fn widths_follow_directwrite() {
+        // DirectWrite's widths of "Night Drive", measured on Windows 11.
+        let mut t = Text::new(FIGTREE);
+        let dw = [(13.333, 400, 67.34), (15.0, 400, 75.76), (46.667, 400, 235.70), (13.333, 600, 69.71), (18.333, 500, 95.85), (46.667, 600, 244.0), (13.333, 700, 72.76), (18.333, 700, 100.04), (46.667, 700, 254.66)];
+        for (size, weight, dw) in dw {
+            let w = t.layout("Night Drive", size, weight, 100_000.0, 0, Align::Left, 0.0, 0).width;
+            assert!((w - dw).abs() / dw < 0.002, "{size} px, {weight}: {w} against {dw}");
+        }
+    }
+
+    #[test]
+    fn contrast_keeps_the_ends() {
+        let t = contrast_table();
+        assert_eq!((t[0], t[255]), (0, 255));
+        assert!(t[128] > 128);
     }
 }

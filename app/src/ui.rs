@@ -151,6 +151,8 @@ pub(crate) enum Ctl {
     Mic,
     Timer,
     Light,
+    /// Memory, video memory and Sofa's frame rate; the overlay.
+    Perf,
     Power,
 }
 
@@ -163,6 +165,7 @@ impl Ctl {
             Ctl::Mic => "mic",
             Ctl::Timer => "timer",
             Ctl::Light => "light",
+            Ctl::Perf => "perf",
             Ctl::Power => "power",
         }
     }
@@ -381,6 +384,8 @@ pub(crate) enum Act {
     SpForgetNow,
     SpPlay(String, bool),
     SpOpen(String),
+    /// A line that only shows something (the Performance panel's numbers).
+    Info,
 }
 
 #[derive(Clone)]
@@ -431,6 +436,8 @@ pub(crate) enum SheetKind {
     Sound,
     /// Sleep, restart, shut down, from the quick menu.
     Power,
+    /// Memory, video memory and the frame rate, from the quick menu.
+    Perf,
     /// Connect Spotify, its account, and a playlist's or album's options.
     SpSetup,
     SpAccount,
@@ -554,6 +561,11 @@ pub struct App {
     pub(crate) sp_id: String,
     /// Spotify changed while a menu was open: Home and Music rebuild when it closes.
     music_stale: bool,
+    /// What the Performance panel and the overlay show, and when it was read.
+    pub(crate) perf: Option<crate::perf::Usage>,
+    perf_at: f64,
+    /// The frames drawn in the last second, for the frame rate.
+    pub(crate) frames: crate::perf::Frames,
     /// An Xbox (XInput) pad was connected this run: Game Bar's use of its button is offered.
     pub(crate) xbox: bool,
 }
@@ -650,6 +662,9 @@ impl App {
             music,
             sp_id: String::new(),
             music_stale: false,
+            perf: None,
+            perf_at: -1e9,
+            frames: Default::default(),
             xbox,
             tab: "home".into(),
             rows: Vec::new(),
@@ -1982,7 +1997,11 @@ impl App {
                 self.toggle(key, now);
                 self.refresh_settings();
                 self.refresh_welcome();
+                if key == "perfOverlay" {
+                    self.read_perf(now, true);
+                }
             }
+            Act::Info => sound::play(Sound::Edge),
             Act::HomeButton => {
                 let next = if self.store.text("homeButton") == "combo" { "ps" } else { "combo" };
                 self.store.set("homeButton", Value::from(next));
@@ -2293,6 +2312,11 @@ impl App {
         if minute != self.minute {
             self.minute = minute;
             self.dirty = true;
+        }
+        // The Performance panel, its card and the overlay show numbers read once a second.
+        let perf_shown = self.store.flag("perfOverlay") || self.layers.iter().any(|l| matches!(l, Layer::Quick { .. } | Layer::Sheet { kind: SheetKind::Perf, .. }));
+        if perf_shown {
+            self.read_perf(now, false);
         }
         self.watch_pads(now);
         self.resume_tick(now);
@@ -2838,6 +2862,7 @@ impl App {
         if self.qa || self.input.info().connected {
             v.push(Ctl::Light);
         }
+        v.push(Ctl::Perf);
         v.push(Ctl::Power);
         v
     }
@@ -2869,12 +2894,73 @@ impl App {
                 None => face("timer", "Sleep timer", "Off".into(), false, "Start"),
             },
             Ctl::Light => face("lightbulb", "Controller light", self.light_name().into(), false, "Change"),
+            Ctl::Perf => {
+                let value = self.perf.as_ref().filter(|u| u.ram_total > 0).map_or_else(String::new, |u| format!("{}% memory", crate::perf::percent(u.ram_used, u.ram_total)));
+                face("gauge", "Performance", value, self.store.flag("perfOverlay"), "Open")
+            }
             Ctl::Power => face("shutdown", "Power", String::new(), false, "Open"),
         }
     }
 
+    /// Sofa's frame rate as the panel and the overlay say it ("60 fps, 3.1 ms to draw").
+    pub(crate) fn fps_text(&self, now: f64) -> String {
+        let fps = self.frames.fps(now);
+        match (fps, self.frames.ms(now)) {
+            (2.., Some(ms)) => format!("{fps} fps, {ms:.1} ms to draw"),
+            (_, Some(ms)) => format!("Idle, {ms:.1} ms to draw"),
+            _ => "Idle".into(),
+        }
+    }
+
+    /// Reads memory and video memory again (at most once a second), and the open Performance
+    /// panel with them.
+    fn read_perf(&mut self, now: f64, force: bool) {
+        if !force && now - self.perf_at < 1000.0 {
+            return;
+        }
+        self.perf = Some(crate::perf::read());
+        self.perf_at = now;
+        let opts = self.perf_opts(now);
+        for l in &mut self.layers {
+            if let Layer::Sheet { opts: o, kind: SheetKind::Perf, .. } = l {
+                *o = opts.clone();
+            }
+        }
+        self.dirty = true;
+    }
+
+    fn perf_opts(&self, now: f64) -> Vec<Opt> {
+        let mut opts = vec![Opt::new("Show on screen", Act::Toggle("perfOverlay")).icon("gauge").switch(self.store.flag("perfOverlay"))];
+        if let Some(u) = &self.perf {
+            if u.ram_total > 0 {
+                opts.push(Opt::new("Memory", Act::Info).value(format!("{}, {}%", crate::perf::of(u.ram_used, u.ram_total), crate::perf::percent(u.ram_used, u.ram_total))));
+            }
+            for g in &u.gpus {
+                let value = match g.used {
+                    Some(used) => format!("{}, {}%", crate::perf::of(used, g.total), crate::perf::percent(used, g.total)),
+                    None => format!("{} in all", crate::perf::gb(g.total)),
+                };
+                opts.push(Opt::new("Video memory", Act::Info).detail(g.name.clone()).value(value));
+            }
+            if u.gpus.is_empty() {
+                opts.push(Opt::new("Video memory", Act::Info).value("Not reported by this graphics card"));
+            }
+            opts.push(Opt::new("Sofa", Act::Info).value(crate::perf::mb(u.sofa)));
+        }
+        opts.push(Opt::new("Frame rate", Act::Info).value(self.fps_text(now)));
+        opts
+    }
+
+    fn perf_sheet(&mut self, now: f64) {
+        self.read_perf(now, true);
+        let opts = self.perf_opts(now);
+        sound::play(Sound::Open);
+        self.layers.push(Layer::Sheet { title: "Performance".into(), sub: "Memory and video memory in use now, and how fast Sofa draws.".into(), opts, focus: 0, kind: SheetKind::Perf });
+    }
+
     fn quick_menu(&mut self, now: f64) {
         self.audio_refresh();
+        self.read_perf(now, true);
         let focus = self.quick_ctls()[0];
         sound::play(Sound::Open);
         self.layers.push(Layer::Quick { focus, at: now });
@@ -2949,6 +3035,7 @@ impl App {
             }
             Ctl::Timer => self.cycle_timer(),
             Ctl::Light => self.cycle_light(),
+            Ctl::Perf => self.perf_sheet(now),
             Ctl::Power => self.power_sheet(),
         }
         self.dirty = true;

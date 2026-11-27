@@ -76,6 +76,7 @@ features = [
   "Win32_Networking_WinHttp",
   "Win32_Security_Cryptography",
   "Win32_System_Pipes",
+  "Win32_System_Performance",
 ]
 
 # Linux: an X11 window (also under XWayland), drawn on the CPU. Everything here is Rust or loaded

@@ -221,6 +221,28 @@ Key Enter
 $s = State
 Check 'U13 Stay awake turns the timer off' ($s.sleep -eq 'off' -and $s.layer -eq 'none') "sleep $($s.sleep), $($s.layer)"
 
+# ---------- Performance (quick menu) ----------
+# Memory and video memory are read from this PC (nothing changes); the overlay is Sofa's own.
+Key Home
+Key Right 6
+Key Enter
+$s = State
+Check 'U14 Performance shows memory, video memory and the frame rate' ($s.layer -eq 'sheet:Performance:0') $s.layer
+Shot '22-performance' 900
+Key Enter
+Check 'U15 The performance overlay switches on (saved)' ((Settings).settings.perfOverlay -eq $true) "$((Settings).settings.perfOverlay)"
+Key Esc
+Key Home
+Shot '23-performance-overlay' 1200
+Key Home
+Key Right 6
+Key Enter
+Key Enter
+Key Esc
+Key Home
+$s = State
+Check 'U16 and off again' ((Settings).settings.perfOverlay -eq $false -and $s.layer -eq 'none') "$((Settings).settings.perfOverlay), $($s.layer)"
+
 # ---------- Tabs ----------
 $tabs = @()
 for ($i = 0; $i -lt 7; $i++) { Key E 1 450; $tabs += (State).tab; if ((State).tab -eq 'games') { Shot '04-games' } ; if ((State).tab -eq 'social') { Shot '05-social' } ; if ((State).tab -eq 'system') { Shot '05-system' } }

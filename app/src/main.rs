@@ -22,6 +22,7 @@ mod library;
 mod linux;
 #[cfg_attr(target_os = "linux", path = "linux/media.rs")]
 mod media;
+mod perf;
 #[cfg_attr(target_os = "linux", path = "linux/platform.rs")]
 mod platform;
 mod shell;
