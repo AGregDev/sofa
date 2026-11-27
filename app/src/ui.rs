@@ -2902,7 +2902,7 @@ impl App {
         }
     }
 
-    /// Sofa's frame rate as the panel and the overlay say it ("60 fps, 3.1 ms to draw"). Sofa
+    /// Sofa's frame rate as the overlay says it ("60 fps, 3.1 ms to draw"). Sofa
     /// draws only when something changes, so with fewer than two frames in the last second it is
     /// idle (and the time a frame takes is left out, or the overlay would draw itself again each
     /// second to show the time of the frame before).
@@ -2931,9 +2931,9 @@ impl App {
         // What is on screen: the quick menu's card, and the panel's or the overlay's numbers.
         let mut shown = self.perf_card();
         if video {
-            for value in opts.iter().filter_map(|o| o.value.as_deref()) {
+            for text in opts.iter().flat_map(|o| [o.value.as_deref(), o.detail.as_deref()]).flatten() {
                 shown.push('|');
-                shown.push_str(value);
+                shown.push_str(text);
             }
         }
         if !force && shown == self.perf_shown {
@@ -2961,7 +2961,7 @@ impl App {
             }
             match &u.gpus {
                 None => opts.push(Opt::new("Video memory", Act::Info).value("Reading")),
-                Some(gpus) if gpus.is_empty() => opts.push(Opt::new("Video memory", Act::Info).value("Not reported by this graphics card")),
+                Some(gpus) if gpus.is_empty() => opts.push(Opt::new("Video memory", Act::Info).value("Not reported")),
                 Some(gpus) => {
                     for g in gpus {
                         let value = match g.used {
@@ -2974,7 +2974,12 @@ impl App {
             }
             opts.push(Opt::new("Sofa", Act::Info).value(crate::perf::mb(u.sofa)));
         }
-        opts.push(Opt::new("Frame rate", Act::Info).value(self.fps_text(now)));
+        // The rate, and the time a frame takes under it (the value column holds about 20 letters).
+        let fps = self.frames.fps(now);
+        opts.push(match (fps, self.frames.ms(now)) {
+            (2.., Some(ms)) => Opt::new("Frame rate", Act::Info).value(format!("{fps} fps")).detail(format!("{ms:.1} ms to draw a frame")),
+            _ => Opt::new("Frame rate", Act::Info).value("Idle"),
+        });
         opts
     }
 

@@ -85,6 +85,11 @@ impl Frames {
     }
 }
 
+/// A card's name with its spaces tidied ("AMD  Radeon RX 7800 XT " is "AMD Radeon RX 7800 XT").
+fn tidy(name: &str) -> String {
+    name.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// "6.1 GB".
 pub fn gb(bytes: u64) -> String {
     format!("{:.1} GB", bytes as f64 / (1u64 << 30) as f64)
@@ -153,7 +158,7 @@ impl Source {
                     continue;
                 }
                 let n = d.Description.iter().position(|&c| c == 0).unwrap_or(d.Description.len());
-                cards.push((String::from_utf16_lossy(&d.Description[..n]).trim().to_owned(), (d.AdapterLuid.HighPart, d.AdapterLuid.LowPart), d.DedicatedVideoMemory as u64));
+                cards.push((tidy(&String::from_utf16_lossy(&d.Description[..n])), (d.AdapterLuid.HighPart, d.AdapterLuid.LowPart), d.DedicatedVideoMemory as u64));
             }
         }
         let (mut query, mut counter) = (PDH_HQUERY::default(), PDH_HCOUNTER::default());
@@ -269,7 +274,7 @@ fn cards() -> Vec<Gpu> {
                 continue;
             }
             let name = std::fs::read_to_string(dev.join("product_name")).ok().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| "AMD Radeon".into());
-            out.push(Gpu { name, used, total });
+            out.push(Gpu { name: tidy(&name), used, total });
         }
     }
     out
@@ -278,7 +283,7 @@ fn cards() -> Vec<Gpu> {
 /// NVIDIA's management library, loaded when there is one (the proprietary driver ships it).
 #[cfg(target_os = "linux")]
 mod nvml {
-    use super::Gpu;
+    use super::{Gpu, tidy};
     use std::ffi::{c_char, c_int, c_uint, c_void};
     use std::sync::OnceLock;
 
@@ -360,7 +365,7 @@ mod nvml {
                 }
                 let mut buf = [0 as c_char; 96];
                 let name = if (l.name)(dev, buf.as_mut_ptr(), buf.len() as c_uint) == 0 {
-                    std::ffi::CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned()
+                    tidy(&std::ffi::CStr::from_ptr(buf.as_ptr()).to_string_lossy())
                 } else {
                     "NVIDIA".into()
                 };
@@ -393,6 +398,11 @@ mod tests {
         assert_eq!(of(3 << 30, 16 << 30), "3.0 of 16.0 GB");
         assert_eq!(percent(1, 4), 25);
         assert_eq!(percent(1, 0), 0);
+    }
+
+    #[test]
+    fn card_names_are_tidied() {
+        assert_eq!(tidy(" AMD  Radeon RX 7800 XT "), "AMD Radeon RX 7800 XT");
     }
 
     #[test]
