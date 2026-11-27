@@ -39,8 +39,10 @@ under Sofa's launch screen). Terms:
 | Native QA run and screenshots | `src/shots.js` | done (`qa/qa.ps1`) |
 | Discord voice (RPC pipe, OAuth over WinHTTP, DPAPI secrets, 1.x secrets) | `src/social.js`, `app.js` | done |
 | Streaming launch cover, page zoom per screen, controller as YouTube's remote | (new, ADR-009) | done |
-| Sound output, mic mute, controller headphones | `audio.ps1`, `app.js` | not yet |
-| DualSense output: lightbar, player light, mute LED | `dualsense.js` | not yet |
+| Sound output, volume, mic mute (quick menu) | `audio.ps1`, `app.js` | done (`audio.rs`); controller headphones by themselves not yet |
+| DualSense output: lightbar, player light, mute LED, mute button | `dualsense.js` | done (`input.rs`), not yet tried on hardware |
+| Quick menu, Now playing, sleep timer | (new) | done (`ui.rs`, `view.rs`, `media.rs`) |
+| Spotify library and playback (Music tab) | (new) | done (`spotify.rs`), not yet tried against a real account |
 | Custom covers, uninstalling games and apps | `main.js`, `uninstall.ps1` | not yet |
 
 ## Measured

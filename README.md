@@ -10,7 +10,7 @@ the PS button always takes you home, and Windows stays out of sight until you le
 
 [![Release](https://img.shields.io/github/v/release/AGregDev/sofa?style=flat-square&color=f0a24b&labelColor=1c1a18)](https://github.com/AGregDev/sofa/releases/latest)
 [![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-efe9de?style=flat-square&labelColor=1c1a18)](#install)
-[![QA](https://img.shields.io/badge/QA-53%2F53%20passing-efe9de?style=flat-square&labelColor=1c1a18)](QA.md)
+[![QA](https://img.shields.io/badge/QA-71%2F71%20passing-efe9de?style=flat-square&labelColor=1c1a18)](QA.md)
 [![Memory](https://img.shields.io/badge/memory-~60%20MB-efe9de?style=flat-square&labelColor=1c1a18)](#small-and-fast)
 [![License: MIT](https://img.shields.io/badge/license-MIT-efe9de?style=flat-square&labelColor=1c1a18)](LICENSE)
 
@@ -44,6 +44,10 @@ no helper processes: about **60 MB of memory** on Home, and almost nothing while
     <td><img src="docs/screenshots/settings.jpg" alt="Settings sheet"><br><b>Settings from the pad.</b> Start with Windows, Home button, button layout, Steam, browser, sounds, motion.</td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/quick-menu.jpg" alt="The quick menu over Home"><br><b>PS on Home: the quick menu.</b> What is playing (Spotify included), sound output, volume, microphone, sleep timer and power, all from the pad.</td>
+    <td><img src="docs/screenshots/sleep-timer.jpg" alt="The sleep timer running in the quick menu"><br><b>Fall asleep on the sofa.</b> A sleep timer for the PC: a minute before, Sofa asks once, then the PC sleeps with your game or film waiting.</td>
+  </tr>
+  <tr>
     <td><img src="docs/screenshots/welcome.jpg" alt="First start"><br><b>Ready in one screen.</b> Start with Windows, keep Steam off the PS button, pick a button layout.</td>
     <td><img src="docs/screenshots/system.jpg" alt="System section"><br><b>Power and system.</b> Sleep, restart, go to the desktop and come back with PS, display and sound settings.</td>
   </tr>
@@ -55,7 +59,8 @@ no helper processes: about **60 MB of memory** on Home, and almost nothing while
 - Starts with Windows and stays in front: the desktop, taskbar and Start menu never show unless you choose **Go to desktop**. The PS button brings Sofa back.
 - **PS button from any game or app** opens Home with that app first: resume, close or force close. Starting a second game asks first.
 - **Steam stays off the PS button:** Sofa switches off Steam's own PS-button setting for you, and pushes Steam back down if it still grabs the screen.
-- Home rows: Running, Jump back in, Favorites, then Games, Media and Apps, each ending in an "All ..." tile.
+- Home rows: Running, Jump back in, Favorites, then Games, Media and Apps, each ending in an "All ..." tile. The hero tells you how long a game has been running and your total Steam play time.
+- **The quick menu (PS on Home):** a bedside clock with what is playing (Spotify, a browser, any player: play, pause, skip), sound output (TV, headphones, the controller), volume, microphone mute, a **sleep timer** and power.
 - Interface sounds, a short start-up, notices for controllers connecting and a low battery.
 
 **Your whole library**
@@ -63,11 +68,13 @@ no helper processes: about **60 MB of memory** on Home, and almost nothing while
 - Sorted into Games, Media, Apps and System automatically. Move, rename, hide or favorite anything.
 - Streaming: YouTube in its TV interface (the controller is its remote), Netflix, Disney+, Prime Video, Crunchyroll and Twitch, full screen in Edge, Chrome or Firefox with Sofa's own browser profile. Sofa's launch screen stays up until the service is ready.
 - Discord voice: your channel with Mute, Deafen and Leave, recent channels on Home, and your servers' voice channels, after a one-time Connect (a Sofa 1.x sign-in carries over).
+- **Spotify from the controller:** Liked Songs, your playlists and albums with their covers in a Music section and on Home; ✕ plays one in the Spotify app on this PC, Shuffle play from △. One-time Connect with a Spotify app you make (Spotify requires Premium for that).
 
 **Made for the DualSense, works with any pad**
 - No drivers: the DualSense is read directly, over USB or Bluetooth, with its battery and charging in the top bar. Xbox and other XInput pads work too, Guide button included.
 - **Button layouts:** match the controller, PlayStation, Xbox (A B X Y) or Nintendo (confirm and back swapped).
 - **Home button:** the PS button, or Create + Options if you would rather leave PS to Steam or the Game Bar.
+- **Lights and the mute button:** the lightbar takes the colour of the game you rest on (or amber, or off), and the mute button mutes your microphone from inside any game, in Discord when you are in voice, with its LED lit, like a PS5.
 
 ### Small and fast
 
@@ -84,8 +91,8 @@ off the main thread at the size it is drawn. Checked on every release by an auto
 
 ## Install
 
-1. Download **Sofa-Setup-2.1.0.exe** from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa. It replaces Sofa 1.x and keeps your settings.
-2. On the first screen, choose whether Sofa starts with Windows and keeps Steam off the PS button, then **Continue**.
+1. Download **Sofa-Setup-2.2.0.exe** from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa. It replaces Sofa 1.x and keeps your settings.
+2. On the first screen, choose whether Sofa starts with Windows and keeps Steam off the PS button (with an Xbox controller: also Game Bar off the Xbox button), then **Continue**.
 3. Steam also listens to the PS button. Sofa turns off Steam's **Guide button focuses Steam** for you: by itself when Steam is closed, or after asking when Steam is open (Steam restarts in the background). You can turn this off in Settings.
 
 Windows SmartScreen may warn that the file is unsigned: choose **More info, Run anyway**.
@@ -98,16 +105,18 @@ in `%APPDATA%\sofa`.
 | --- | --- |
 | D-pad, left stick | Move |
 | ✕ | Open, play, select |
-| ○ | Back |
+| ○ | Back (on Home: back to the first tile) |
 | △ | Options: favorite, move, rename, hide; resume or close a running app |
 | □ | Search |
 | Options | Settings |
-| L1, R1 | Previous, next section |
+| L1, R1 | Previous, next section (in the quick menu: previous, next track) |
 | L2, R2 | Volume (in the keyboard: Shift and Done) |
-| PS | Home, from anywhere (or Create + Options, if you prefer) |
+| PS | Home, from anywhere; on Home, the quick menu (or Create + Options, if you prefer) |
+| Mute | Mutes the microphone, from any game |
 
 Keyboard: arrows, Enter, Esc, Q and E for sections, M options, F search, O settings,
-type to search, Ctrl+V to paste. **Ctrl+Alt+H** brings Sofa to the front from anywhere.
+the minus and equals keys for volume, Home for the quick menu, type to search, Ctrl+V to
+paste. **Ctrl+Alt+H** brings Sofa to the front from anywhere.
 
 ## Build from source
 
@@ -129,7 +138,7 @@ cargo build --release
 | `powershell -ExecutionPolicy Bypass -File qa\qa.ps1` | Automated QA: drives every screen, checks memory and CPU, writes `shots\qa.txt` |
 | `sofa.exe --windowed` | Runs in a window instead of full screen (`--log` writes `%TEMP%\sofa-native.log`) |
 
-Copy `sofa.exe` to a name containing "setup" (`Sofa-Setup-2.1.0.exe`) and it installs itself.
+Copy `sofa.exe` to a name containing "setup" (`Sofa-Setup-2.2.0.exe`) and it installs itself.
 
 ## How it works
 
@@ -137,6 +146,10 @@ Copy `sofa.exe` to a name containing "setup" (`Sofa-Setup-2.1.0.exe`) and it ins
 sofa.exe ─ one window, one message loop: draws only while something moves
    ├─ gfx      Direct2D on a DXGI flip swap chain, DirectWrite (Figtree), WIC decoding thread
    ├─ input    XInput (Guide via XInputGetStateEx), the DualSense over raw HID on its own thread
+   │           (buttons in, lightbar, player light and mute LED out, only when they change)
+   ├─ audio    sound outputs, volume and the microphone (Windows' endpoint APIs)
+   ├─ media    Now playing from Windows' media sessions, on its own thread
+   ├─ spotify  your Spotify library and playback (Web API, PKCE sign-in), on its own thread
    ├─ shell    foreground events: stays in front, guards the desktop, pushes Steam back
    ├─ library  Steam manifests and art (crates/vdf), RecompLauncher, the Start menu
    └─ steam    turns off Steam's PS-button setting in localconfig.vdf, safely (crates/steam)

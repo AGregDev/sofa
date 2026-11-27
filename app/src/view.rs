@@ -10,8 +10,6 @@ use crate::ui::*;
 use std::path::PathBuf;
 
 const SCRIM: Color = Color(0.04, 0.035, 0.03, 0.62);
-/// Discord's own colour, for its tiles (as streaming services show theirs).
-const DISCORD: Color = Color::hex(0x5865f2);
 const WHITE: Color = Color::hex(0xffffff);
 
 /// A streaming service's own look, standing in for art: its colour and its mark, or its name
@@ -58,6 +56,8 @@ struct Hero {
     /// Streaming services: their colour and mark stand in for art.
     look: Option<WebLook>,
     glyph: Option<&'static str>,
+    /// Square art (a playlist or album): drawn large, its colour washing the stage.
+    cover: Option<PathBuf>,
     meta: String,
     verb: &'static str,
     options: bool,
@@ -100,6 +100,7 @@ impl App {
             Key::R1 => ["R1", "RB", "R"],
             Key::L2 => ["L2", "LT", "ZL"],
             Key::R2 => ["R2", "RT", "ZR"],
+            Key::Home => ["", "Guide", "Home"],
         };
         t[kind]
     }
@@ -120,7 +121,12 @@ impl App {
         self.gfx.fill(Rect::new(rect.x, rect.y + 2.0, rect.w, rect.h), DEEP, 6.0);
         self.gfx.fill(rect, RAISED, 6.0);
         self.gfx.stroke(rect.inset(0.5), LINE, 5.5, 1.0);
-        if label.is_empty() {
+        if k == Key::Home && label.is_empty() {
+            // The PS button: PlayStation's mark, filled.
+            if let Some((n, path)) = icons::brand("playstation") {
+                self.gfx.icon(n, path, Rect::new(x + (w - 1.25 * r) / 2.0, cy - 0.625 * r, 1.25 * r, 1.25 * r), T1, true, 0.0);
+            }
+        } else if label.is_empty() {
             let name = match k {
                 Key::Cross => "cross",
                 Key::Circle => "circle",
@@ -181,25 +187,72 @@ impl App {
         self.keycap(Key::R1, x - gap + 1.5 * r, cy);
         let (lx, lw) = (self.tab_line.0.value(now), self.tab_line.1.value(now));
         self.gfx.fill(Rect::new(lx, cy + 1.05 * r, lw, 2.0), ACCENT, 1.0);
-        // Clock and controller battery, right.
-        let clock = clock_text();
-        let (cw, _) = self.gfx.measure(&clock, size, 400);
-        self.gfx.text(&clock, w - pad - cw, cy - size * 0.65, cw + 4.0, size, 400, T2, Align::Left, 0, 0.0);
-        let info = self.input.info();
-        if let (true, Some(b)) = (info.connected, info.battery) {
-            let text = format!("{b}%");
-            let (tw, _) = self.gfx.measure(&text, 1.25 * r, 400);
-            let low = b <= 20 && !info.charging;
-            let mut bx = w - pad - cw - 1.5 * r - tw;
-            self.gfx.text(&text, bx, cy - 0.8 * r, tw + 4.0, 1.25 * r, 400, if low { ACCENT } else { T2 }, Align::Left, 0, 0.0);
-            if info.charging
-                && let Some((n, svg)) = icons::icon("zap")
-            {
-                bx -= 1.625 * r;
-                self.gfx.icon(n, svg, Rect::new(bx, cy - 0.5625 * r, 1.125 * r, 1.125 * r), T2, false, 1.5);
+        // Right: the clock, then leftwards the controller's battery, the sleep timer and a muted
+        // microphone (amber: states that are on). While L2 or R2 changes the volume, its level
+        // takes their place for a moment.
+        let since = now - self.vol_at;
+        let quick = self.layers.iter().any(|l| matches!(l, Layer::Quick { .. }));
+        let hud = if quick || since >= 1800.0 {
+            0.0
+        } else if self.motion() == 0.0 {
+            1.0
+        } else {
+            ease((since / 140.0).clamp(0.0, 1.0)) as f32 * (1.0 - ease(((since - 1500.0) / 300.0).clamp(0.0, 1.0)) as f32)
+        };
+        let status = 1.0 - hud;
+        if status > 0.0 {
+            let clock = clock_text();
+            let (cw, _) = self.gfx.measure(&clock, size, 400);
+            let mut rx = w - pad - cw;
+            self.gfx.text(&clock, rx, cy - size * 0.65, cw + 4.0, size, 400, T2.alpha(status), Align::Left, 0, 0.0);
+            let info = self.input.info();
+            if let (true, Some(b)) = (info.connected, info.battery) {
+                let text = format!("{b}%");
+                let (tw, _) = self.gfx.measure(&text, 1.25 * r, 400);
+                let low = b <= 20 && !info.charging;
+                rx -= 1.5 * r + tw;
+                self.gfx.text(&text, rx, cy - 0.8 * r, tw + 4.0, 1.25 * r, 400, (if low { ACCENT } else { T2 }).alpha(status), Align::Left, 0, 0.0);
+                if info.charging
+                    && let Some((n, svg)) = icons::icon("zap")
+                {
+                    rx -= 1.625 * r;
+                    self.gfx.icon(n, svg, Rect::new(rx, cy - 0.5625 * r, 1.125 * r, 1.125 * r), T2.alpha(status), false, 1.5);
+                }
+                if let Some((n, path)) = icons::brand("playstation") {
+                    rx -= 1.75 * r;
+                    self.gfx.icon(n, path, Rect::new(rx, cy - 0.625 * r, 1.25 * r, 1.25 * r), T3.alpha(status), true, 0.0);
+                }
             }
-            if let Some((n, path)) = icons::brand("playstation") {
-                self.gfx.icon(n, path, Rect::new(bx - 1.75 * r, cy - 0.625 * r, 1.25 * r, 1.25 * r), T3, true, 0.0);
+            if let Some(ms) = self.sleep_left() {
+                let text = duration_text((ms / 60_000.0).ceil() as u32);
+                let (tw, _) = self.gfx.measure(&text, 1.25 * r, 400);
+                rx -= 1.75 * r + tw;
+                self.gfx.text(&text, rx, cy - 0.8 * r, tw + 4.0, 1.25 * r, 400, T2.alpha(status), Align::Left, 0, 0.0);
+                if let Some((n, svg)) = icons::icon("sleep") {
+                    rx -= 1.75 * r;
+                    self.gfx.icon(n, svg, Rect::new(rx, cy - 0.625 * r, 1.25 * r, 1.25 * r), ACCENT.alpha(status), false, 1.5);
+                }
+            }
+            if self.mic_muted()
+                && let Some((n, svg)) = icons::icon("micOff")
+            {
+                rx -= 3.0 * r;
+                self.gfx.icon(n, svg, Rect::new(rx, cy - 0.625 * r, 1.25 * r, 1.25 * r), ACCENT.alpha(status), false, 1.5);
+            }
+        }
+        if hud > 0.0 {
+            let (v, muted) = (self.audio.volume.unwrap_or(0.0), self.audio.muted);
+            let text = if muted { "Muted".to_owned() } else { format!("{}%", (v * 100.0).round()) };
+            let (tw, _) = self.gfx.measure(&text, size, 400);
+            let tx = w - pad - tw;
+            self.gfx.text(&text, tx, cy - size * 0.65, tw + 4.0, size, 400, T1.alpha(hud), Align::Left, 0, 0.0);
+            let bar = Rect::new(tx - 1.25 * r - 10.0 * r, cy - 0.1875 * r, 10.0 * r, 0.375 * r);
+            self.gfx.fill(bar, RAISED.alpha(hud), 0.1875 * r);
+            if !muted {
+                self.gfx.fill(Rect::new(bar.x, bar.y, bar.w * v, bar.h), ACCENT.alpha(hud), 0.1875 * r);
+            }
+            if let Some((n, svg)) = icons::icon(if muted { "volumeX" } else { "sound" }) {
+                self.gfx.icon(n, svg, Rect::new(bar.x - 2.5 * r, cy - 0.75 * r, 1.5 * r, 1.5 * r), T2.alpha(hud), false, 1.5);
             }
         }
     }
@@ -218,7 +271,7 @@ impl App {
                 Launch::Web { tv: true, .. } => format!("TV interface in {}", platform::chosen_browser(self.store.text("browser")).map_or("your browser", |b| b.name)),
                 _ => format!("Opens full screen in {}", platform::chosen_browser(self.store.text("browser")).map_or("your browser", |b| b.name)),
             },
-            "system" => system_desc(it.glyph.unwrap_or("")).into(),
+            "system" => system_desc(it.glyph.unwrap_or(""), &self.home_press()),
             _ => match it.category.as_str() {
                 "games" => "Game",
                 "media" => "Media",
@@ -233,19 +286,31 @@ impl App {
         let it = &self.items[i];
         let running = self.item_running(i);
         let source = self.source_label(it);
-        let page = self.running.iter().find(|r| r.item == Some(i)).map(|r| self.run_page(r.win.hwnd)).unwrap_or_default();
+        let run = self.running.iter().find(|r| r.item == Some(i));
+        let page = run.map(|r| self.run_page(r.win.hwnd)).unwrap_or_default();
         let meta = if running && !page.is_empty() {
             format!("Running  ·  {page}")
         } else if running {
-            format!("Running  ·  {source}")
-        } else if it.last_played > 0.0 {
-            format!("{source}  ·  {} {}", if it.category == "games" { "Played" } else { "Opened" }, ago(it.last_played))
+            // How long this session has lasted: the couch loses track of time.
+            match run.and_then(|r| r.since).map(|t| ((epoch_ms() - t) / 60_000.0).floor().max(0.0) as u32) {
+                Some(0) => "Running  ·  Started just now".into(),
+                Some(m) => format!("Running for {}", duration_text(m)),
+                None => format!("Running  ·  {source}"),
+            }
         } else {
-            source
+            let mut parts = vec![source];
+            if it.last_played > 0.0 {
+                parts.push(format!("{} {}", if it.category == "games" { "Played" } else { "Opened" }, ago(it.last_played)));
+            }
+            if it.playtime > 0 {
+                parts.push(playtime_text(it.playtime));
+            }
+            parts.join("  ·  ")
         };
         Hero {
             hero: it.art.hero.clone(),
             capsule: it.art.capsule.clone(),
+            cover: None,
             icon: it.art.icon.clone(),
             logo: it.art.logo.clone(),
             name: it.name.clone(),
@@ -266,6 +331,47 @@ impl App {
     }
 
     fn hero_info(&self, id: &str) -> Option<Hero> {
+        if let Some(key) = id.strip_prefix("mu:") {
+            let m = &self.music;
+            let brand = |name: String, meta: String, verb| Hero {
+                hero: None,
+                capsule: None,
+                cover: None,
+                icon: None,
+                logo: None,
+                name,
+                look: Some(WebLook { bg: SPOTIFY_BG, fg: SPOTIFY, mark: Some("spotify") }),
+                glyph: None,
+                meta,
+                verb,
+                options: false,
+            };
+            return Some(match key {
+                "setup" => brand(
+                    if m.configured { "Reconnect Spotify" } else { "Connect Spotify" }.into(),
+                    m.error.clone().unwrap_or_else(|| "Your playlists and albums, played from the couch".into()),
+                    "Set up",
+                ),
+                "account" => brand("Spotify".into(), if m.ready { format!("Signed in as {}", m.user.clone().unwrap_or_default()) } else { "Reading your library".into() }, "Open"),
+                uri => {
+                    let p = self.pick(uri)?;
+                    let meta = if m.starting.as_deref() == Some(uri) { "Starting on this PC".to_owned() } else { pick_meta(p, m.user.as_deref()) };
+                    Hero {
+                        hero: None,
+                        capsule: None,
+                        cover: p.cover.clone(),
+                        icon: None,
+                        logo: None,
+                        name: p.name.clone(),
+                        look: None,
+                        glyph: Some(if p.kind == crate::spotify::Kind::Liked { "heart" } else { "music" }),
+                        meta,
+                        verb: "Play",
+                        options: true,
+                    }
+                }
+            });
+        }
         if let Some(key) = id.strip_prefix("dc:") {
             let soc = self.soc_by_key(key)?;
             let verb = soc_verb(&soc);
@@ -273,6 +379,7 @@ impl App {
             return Some(Hero {
                 hero: None,
                 capsule: None,
+                cover: None,
                 icon: f.image,
                 logo: None,
                 name: f.name,
@@ -291,6 +398,7 @@ impl App {
             return Some(Hero {
                 hero: None,
                 capsule: None,
+                cover: None,
                 icon: run.icon.clone(),
                 logo: None,
                 name: self.run_name(h),
@@ -329,6 +437,16 @@ impl App {
             let zoom = 1.03 - 0.03 * if m > 0.0 { ease(((now - start) / 1200.0).clamp(0.0, 1.0)) as f32 } else { 1.0 };
             if let Some(art) = &hero.hero {
                 self.gfx.image_sized(art, Rect::new(0.0, 0.0, w, h).scaled(zoom), (w * 1.03, h * 1.03), Fit::CoverAt(0.3), 0.0, opacity);
+            } else if let Some(cover) = &hero.cover {
+                // A playlist or album: its own colour washes the stage, the cover sits right of
+                // centre (as a streaming service's colour and mark do).
+                if let Some(tone) = self.gfx.tone(cover) {
+                    self.gfx.fill(Rect::new(0.0, 0.0, w, h), tone.alpha(0.3 * opacity), 0.0);
+                }
+                let s = 26.0 * r;
+                let cy = h / 2.0 + r;
+                let at = Rect::new(w - 12.0 * r - s, cy - s / 2.0, s, s).scaled(zoom);
+                self.gfx.image_sized(cover, at, (s * 1.03, s * 1.03), Fit::Cover, r, opacity);
             } else if let Some(look) = hero.look {
                 // A streaming service: its colour fills the stage, its mark sits right of centre.
                 self.gfx.fill(Rect::new(0.0, 0.0, w, h), look.bg.alpha(0.6 * opacity), 0.0);
@@ -436,8 +554,10 @@ impl App {
                 continue;
             }
             self.gfx.text(&title, pad, y0, 30.0 * r, 1.375 * r, 500, T2, Align::Left, 0, 0.0);
-            let (tw_title, _) = self.gfx.measure(&title, 1.375 * r, 500);
-            self.gfx.text(&count.to_string(), pad + tw_title + 0.75 * r, y0 + 0.2 * r, 6.0 * r, 1.125 * r, 400, T3, Align::Left, 0, 0.0);
+            if count > 0 {
+                let (tw_title, _) = self.gfx.measure(&title, 1.375 * r, 500);
+                self.gfx.text(&count.to_string(), pad + tw_title + 0.75 * r, y0 + 0.2 * r, 6.0 * r, 1.125 * r, 400, T3, Align::Left, 0, 0.0);
+            }
             let ty = y0 + 1.925 * r + 1.0 * r;
             let sx = self.scroll_x.get(ri).map_or(0.0, |t| t.value(now));
             for ci in 0..self.rows[ri].tiles.len() {
@@ -574,7 +694,57 @@ impl App {
                 self.running_badge(rect);
             }
             Tile::Social(s) => self.social_tile(s, rect, base, focused),
+            Tile::Music(m) => self.music_tile(m, rect, base, focused),
         }
+    }
+
+    /// A Spotify tile: the cover, square, with the name and what it is below (as music apps
+    /// show them); Spotify's own colour and mark for the account and Connect.
+    fn music_tile(&mut self, m: &Mu, rect: Rect, base: (f32, f32), focused: bool) {
+        let r = self.rem();
+        let radius = 0.75 * r;
+        let w = rect.w - 2.0 * r;
+        let sub_y = rect.bottom() - 1.25 * r - 0.95 * r * 1.3;
+        let (name, sub, cover, glyph) = match m {
+            Mu::Play(uri) => {
+                let Some(p) = self.pick(uri) else { return };
+                let sub = match p.kind {
+                    crate::spotify::Kind::Album => p.by.clone(),
+                    _ => p.songs.map(crate::spotify::songs_text).unwrap_or_default(),
+                };
+                (p.name.clone(), sub, p.cover.clone(), if p.kind == crate::spotify::Kind::Liked { "heart" } else { "music" })
+            }
+            Mu::Setup | Mu::Account => {
+                self.gfx.fill(rect, SPOTIFY_BG, radius);
+                self.gfx.stroke(rect.inset(0.5), LINE, radius, 1.0);
+                if let Some((n, path)) = icons::brand("spotify") {
+                    let s = rect.w * 0.36;
+                    self.gfx.icon(n, path, Rect::new(rect.x + (rect.w - s) / 2.0, rect.y + rect.h * 0.2, s, s), SPOTIFY, true, 0.0);
+                }
+                let (name, sub) = match m {
+                    Mu::Setup => (if self.music.configured { "Reconnect Spotify" } else { "Connect Spotify" }.to_owned(), self.music.error.clone().unwrap_or_else(|| "Play your music from here".into())),
+                    _ => ("Spotify".to_owned(), if self.music.ready { self.music.user.clone().unwrap_or_default() } else { "Reading your library".into() }),
+                };
+                self.gfx.text(&sub, rect.x + r, sub_y, w, 0.95 * r, 400, WHITE.alpha(0.7), Align::Center, 0, 0.0);
+                let nh = self.gfx.text_height(&name, 1.125 * r, 500, w, 2);
+                self.gfx.text(&name, rect.x + r, sub_y - 0.35 * r - nh, w, 1.125 * r, 500, WHITE, Align::Center, 2, 0.0);
+                return;
+            }
+        };
+        self.gfx.fill(rect, CARD, radius);
+        self.gfx.stroke(rect.inset(0.5), LINE, radius, 1.0);
+        let art = Rect::new(rect.x + 0.75 * r, rect.y + 0.75 * r, rect.w - 1.5 * r, rect.w - 1.5 * r);
+        self.gfx.fill(art, DEEP, 0.5 * r);
+        let k = base.0 / rect.w.max(1.0);
+        if cover.as_ref().and_then(|c| self.gfx.image_sized(c, art, (art.w * k, art.h * k), Fit::Cover, 0.5 * r, 1.0)).is_none()
+            && let Some((n, svg)) = icons::icon(glyph)
+        {
+            let g = art.w * 0.34;
+            self.gfx.icon(n, svg, Rect::new(art.x + (art.w - g) / 2.0, art.y + (art.h - g) / 2.0, g, g), T2, false, 1.5);
+        }
+        self.gfx.text(&sub, rect.x + r, sub_y, w, 0.95 * r, 400, T3, Align::Left, 0, 0.0);
+        let nh = self.gfx.text_height(&name, 1.125 * r, 500, w, 2);
+        self.gfx.text(&name, rect.x + r, sub_y - 0.35 * r - nh, w, 1.125 * r, 500, if focused { T1 } else { T2 }, Align::Left, 2, 0.0);
     }
 
     /// A Discord tile: Discord's colour and mark for your channel, the account and setup;
@@ -634,6 +804,9 @@ impl App {
         let (accept, options) = match self.focused_tile() {
             Some(Tile::Running(_)) => ("Resume", true),
             Some(Tile::Social(s)) => (soc_verb(s), false),
+            Some(Tile::Music(Mu::Play(_))) => ("Play", true),
+            Some(Tile::Music(Mu::Setup)) => ("Set up", false),
+            Some(Tile::Music(Mu::Account)) => ("Open", false),
             Some(Tile::Item(i)) => (if self.item_running(*i) { "Resume" } else { "Select" }, self.items[*i].source != "system"),
             Some(Tile::Nav { .. }) => ("Select", false),
             None => ("", false),
@@ -647,15 +820,198 @@ impl App {
         }
         x = self.hint(Key::Square, "Search", x, cy, T2);
         self.hint(Key::Options, "Settings", x, cy, T2);
-        // Volume, right.
+        // Right: what works everywhere. Volume, and on Home the PS button's quick menu.
+        let volume_x = self.volume_hint(cy, 1.0);
+        if self.tab == "home" && self.input.ps_home {
+            let q = "Quick menu";
+            let qw = self.gfx.measure(q, 1.125 * r, 400).0;
+            let kw = self.key_width(Key::Home);
+            self.hint(Key::Home, q, volume_x - 2.25 * r - qw - 0.75 * r - kw, cy, T3);
+        }
+    }
+
+    /// "L2 R2 Volume" at the right edge, centred on `cy`. Returns where it starts.
+    fn volume_hint(&mut self, cy: f32, a: f32) -> f32 {
+        let r = self.rem();
         let label = "Volume";
         let lw = self.gfx.measure(label, 1.125 * r, 400).0;
         let k2 = self.key_width(Key::R2);
         let k1 = self.key_width(Key::L2);
-        let mut rx = w - 4.0 * r - lw - 0.75 * r - k2 - 0.5 * r - k1;
+        let start = self.gfx.width - 4.0 * r - lw - 0.75 * r - k2 - 0.5 * r - k1;
+        let mut rx = start;
         rx += self.keycap(Key::L2, rx, cy) + 0.5 * r;
         rx += self.keycap(Key::R2, rx, cy) + 0.75 * r;
-        self.gfx.text(label, rx, cy - 0.73 * r, lw + 4.0, 1.125 * r, 400, T3, Align::Left, 0, 0.0);
+        self.gfx.text(label, rx, cy - 0.73 * r, lw + 4.0, 1.125 * r, 400, T3.alpha(a), Align::Left, 0, 0.0);
+        start
+    }
+
+    // ---------- Quick menu ----------
+
+    /// The quick menu (the PS button on Home): a bedside clock with the date, when the PC will
+    /// sleep and the controller's charge, then the controls people reach for from the couch.
+    fn draw_quick(&mut self, focus: Ctl, at: f64, now: f64) {
+        let r = self.rem();
+        let (w, h) = (self.gfx.width, self.gfx.height);
+        let p = if self.motion() > 0.0 { ease(((now - at) / 320.0).clamp(0.0, 1.0)) as f32 } else { 1.0 };
+        self.gfx.fill(Rect::new(0.0, 0.0, w, h), SCRIM.alpha(p), 0.0);
+        // The menu takes the shelf's place; the art stays above it.
+        let ph = h * 0.42;
+        let panel = Rect::new(0.0, h - ph + (1.0 - p) * 3.0 * r, w, ph);
+        self.gfx.fill(panel, DEEP, 0.0);
+        self.gfx.fill(Rect::new(0.0, panel.y, w, 1.0), LINE, 0.0);
+        let x0 = 4.0 * r;
+        // The time, large, with the date on its baseline.
+        let ty = panel.y + 3.0 * r;
+        let big = 3.5 * r;
+        let small = 1.375 * r;
+        let baseline = |size: f32| ty + big * 0.96 - size * 0.96;
+        let clock = clock_text();
+        let (cw, _) = self.gfx.measure(&clock, big, 500);
+        self.gfx.text(&clock, x0, ty, cw + 8.0, big, 500, T1.alpha(p), Align::Left, 0, -0.02);
+        self.gfx.text(&date_text(), x0 + cw + 1.5 * r, baseline(small), 40.0 * r, small, 400, T2.alpha(p), Align::Left, 0, 0.0);
+        // Right, on the same line: the controller's charge, and when the PC sleeps.
+        let mut rx = w - x0;
+        let sy = baseline(small);
+        let icy = sy + small * 0.62;
+        let info = self.input.info();
+        if let (true, Some(b)) = (info.connected, info.battery) {
+            let text = format!("{b}%");
+            let (tw, _) = self.gfx.measure(&text, small, 400);
+            rx -= tw;
+            let low = b <= 20 && !info.charging;
+            self.gfx.text(&text, rx, sy, tw + 4.0, small, 400, (if low { ACCENT } else { T2 }).alpha(p), Align::Left, 0, 0.0);
+            if info.charging
+                && let Some((n, svg)) = icons::icon("zap")
+            {
+                rx -= 1.75 * r;
+                self.gfx.icon(n, svg, Rect::new(rx, icy - 0.625 * r, 1.25 * r, 1.25 * r), T2.alpha(p), false, 1.5);
+            }
+            if let Some((n, path)) = icons::brand("playstation") {
+                rx -= 2.0 * r;
+                self.gfx.icon(n, path, Rect::new(rx, icy - 0.7 * r, 1.4 * r, 1.4 * r), T3.alpha(p), true, 0.0);
+            }
+            rx -= 2.5 * r;
+        }
+        if let Some(ms) = self.sleep_left() {
+            let text = format!("Sleeps at {}", clock_in((ms / 60_000.0).round() as u32));
+            let (tw, _) = self.gfx.measure(&text, small, 400);
+            rx -= tw;
+            self.gfx.text(&text, rx, sy, tw + 4.0, small, 400, T2.alpha(p), Align::Left, 0, 0.0);
+            if let Some((n, svg)) = icons::icon("sleep") {
+                rx -= 2.0 * r;
+                self.gfx.icon(n, svg, Rect::new(rx, icy - 0.7 * r, 1.4 * r, 1.4 * r), ACCENT.alpha(p), false, 1.5);
+            }
+        }
+        // The controls: as wide as what they say, scrolled so the focused one shows.
+        let ctls = self.quick_ctls();
+        let faces: Vec<CtlFace> = ctls.iter().map(|&c| self.ctl_face(c)).collect();
+        let gap = 1.25 * r;
+        let widths: Vec<f32> = ctls
+            .iter()
+            .zip(&faces)
+            .map(|(c, f)| {
+                let lw = self.gfx.measure(f.label, 1.125 * r, 400).0.max(self.gfx.measure(&f.app, 1.125 * r, 400).0);
+                let vw = self.gfx.measure(&f.value, 1.375 * r, 500).0;
+                match c {
+                    // The art beside the track; long titles end in an ellipsis.
+                    Ctl::Music => (lw.max(vw) + 11.25 * r).clamp(22.0 * r, 28.0 * r),
+                    Ctl::Output => (lw.max(vw) + 3.25 * r).clamp(15.0 * r, 22.0 * r),
+                    _ => (lw.max(vw) + 3.25 * r).clamp(10.5 * r, 22.0 * r),
+                }
+            })
+            .collect();
+        let fi = ctls.iter().position(|c| *c == focus).unwrap_or(0);
+        let total = widths.iter().sum::<f32>() + gap * (widths.len() as f32 - 1.0);
+        let avail = w - 2.0 * x0;
+        let before: f32 = widths[..fi].iter().sum::<f32>() + gap * fi as f32;
+        let off = if total <= avail { 0.0 } else { (before + widths[fi] - avail).max(0.0).min(total - avail) };
+        let y = ty + 7.25 * r;
+        let mut x = x0 - off;
+        for (i, f) in faces.iter().enumerate() {
+            let rect = Rect::new(x, y, widths[i], 10.0 * r);
+            if ctls[i] == Ctl::Music {
+                self.playing_tile(f, rect, i == fi, p);
+            } else {
+                self.ctl_tile(f, rect, i == fi, p);
+            }
+            x += widths[i] + gap;
+        }
+        let hy = panel.bottom() - 2.75 * r;
+        let mut hx = self.hint(Key::Cross, faces[fi].verb, x0, hy, T2.alpha(p));
+        if ctls[fi] == Ctl::Music {
+            hx = self.hint(Key::L1, "Previous", hx, hy, T2.alpha(p));
+            hx = self.hint(Key::R1, "Next", hx, hy, T2.alpha(p));
+        }
+        hx = self.hint(Key::Options, "Settings", hx, hy, T2.alpha(p));
+        self.hint(Key::Circle, "Close", hx, hy, T2.alpha(p));
+        self.volume_hint(hy, p);
+    }
+
+    /// What is playing: its art, whether it plays (the amber dot, as on Running cards), the
+    /// artist and the track.
+    fn playing_tile(&mut self, f: &CtlFace, rect: Rect, focused: bool, a: f32) {
+        let r = self.rem();
+        let radius = 0.75 * r;
+        if focused {
+            self.gfx.stroke(rect.inset(-4.0 - 1.5), T1.alpha(a), radius + 5.5, 3.0);
+        }
+        self.gfx.fill(rect, if focused { RAISED } else { CARD }, radius);
+        if !focused {
+            self.gfx.stroke(rect.inset(0.5), LINE, radius, 1.0);
+        }
+        let art = Rect::new(rect.x + 1.5 * r, rect.y + 1.5 * r, rect.h - 3.0 * r, rect.h - 3.0 * r);
+        self.gfx.fill(art, DEEP, 0.4 * r);
+        // The art fades in over the empty square; without art, a note stands in.
+        if f.art.as_ref().and_then(|p| self.gfx.image(p, art, Fit::Cover, 0.4 * r, a)).is_none()
+            && let Some((n, svg)) = icons::icon("music")
+        {
+            let s = 2.5 * r;
+            self.gfx.icon(n, svg, Rect::new(art.x + (art.w - s) / 2.0, art.y + (art.h - s) / 2.0, s, s), T3.alpha(a), false, 1.5);
+        }
+        let tx = art.right() + 1.25 * r;
+        let tw = rect.right() - 1.5 * r - tx;
+        let playing = f.verb == "Pause";
+        let mut lx = tx;
+        if playing {
+            self.gfx.fill(Rect::new(tx, rect.y + 1.5 * r + 0.45 * r, 0.5 * r, 0.5 * r), ACCENT.alpha(a), 0.25 * r);
+            lx += 0.9 * r;
+        }
+        self.gfx.text(f.label, lx, rect.y + 1.5 * r, tw, 1.125 * r, 400, (if playing { T2 } else { T3 }).alpha(a), Align::Left, 0, 0.0);
+        let vy = rect.bottom() - 1.4 * r - 1.375 * r * 1.3;
+        self.gfx.text(&f.app, tx, vy - 1.125 * r * 1.3 - 0.2 * r, tw, 1.125 * r, 400, (if focused { T2 } else { T3 }).alpha(a), Align::Left, 0, 0.0);
+        self.gfx.text(&f.value, tx, vy, tw, 1.375 * r, 500, T1.alpha(a), Align::Left, 0, 0.0);
+    }
+
+    /// One quick menu control: its icon, then what it is and its state. A state that is on
+    /// (muted, a timer running) is amber; the volume shows its level as a bar.
+    fn ctl_tile(&mut self, f: &CtlFace, rect: Rect, focused: bool, a: f32) {
+        let r = self.rem();
+        let radius = 0.75 * r;
+        if focused {
+            self.gfx.stroke(rect.inset(-4.0 - 1.5), T1.alpha(a), radius + 5.5, 3.0);
+        }
+        self.gfx.fill(rect, if focused { RAISED } else { CARD }, radius);
+        if !focused {
+            self.gfx.stroke(rect.inset(0.5), LINE, radius, 1.0);
+        }
+        let ic = if f.on { ACCENT } else if focused { T1 } else { T2 };
+        let icon_rect = Rect::new(rect.x + 1.5 * r, rect.y + 1.5 * r, 1.75 * r, 1.75 * r);
+        if let Some((n, svg)) = icons::icon(f.icon) {
+            self.gfx.icon(n, svg, icon_rect, ic.alpha(a), false, 1.5);
+        }
+        if let Some(level) = f.level {
+            let bar = Rect::new(icon_rect.right() + 1.25 * r, icon_rect.y + icon_rect.h / 2.0 - 0.1875 * r, rect.right() - icon_rect.right() - 2.75 * r, 0.375 * r);
+            self.gfx.fill(bar, T1.alpha(0.1 * a), 0.1875 * r);
+            self.gfx.fill(Rect::new(bar.x, bar.y, bar.w * level.clamp(0.0, 1.0), bar.h), ACCENT.alpha(a), 0.1875 * r);
+        }
+        let tw = rect.w - 3.0 * r;
+        let vy = rect.bottom() - 1.4 * r - 1.375 * r * 1.3;
+        if f.value.is_empty() {
+            self.gfx.text(f.label, rect.x + 1.5 * r, vy, tw, 1.375 * r, 500, (if focused { T1 } else { T2 }).alpha(a), Align::Left, 0, 0.0);
+        } else {
+            self.gfx.text(f.label, rect.x + 1.5 * r, vy - 1.125 * r * 1.3 - 0.2 * r, tw, 1.125 * r, 400, (if focused { T2 } else { T3 }).alpha(a), Align::Left, 0, 0.0);
+            self.gfx.text(&f.value, rect.x + 1.5 * r, vy, tw, 1.375 * r, 500, (if f.on { ACCENT } else { T1 }).alpha(a), Align::Left, 0, 0.0);
+        }
     }
 
     // ---------- Layers ----------
@@ -665,7 +1021,7 @@ impl App {
         let r = self.rem();
         match &o.detail {
             Some(d) => 3.1 * r + self.gfx.text_height(d, r, 400, width - 4.5 * r, 2) + 0.9 * r,
-            None => 4.0 * r,
+            None => 3.75 * r,
         }
     }
 
@@ -681,16 +1037,16 @@ impl App {
             }
             let mut tx = x + r;
             if let Some((n, svg)) = o.icon.and_then(icons::icon) {
-                self.gfx.icon(n, svg, Rect::new(tx, y + 1.25 * r, 1.5 * r, 1.5 * r), if on { T1 } else { T3 }, false, 1.5);
+                self.gfx.icon(n, svg, Rect::new(tx, y + 1.125 * r, 1.5 * r, 1.5 * r), if on { T1 } else { T3 }, false, 1.5);
                 tx += 2.5 * r;
             }
             let room = if o.value.is_some() { 13.0 * r } else if o.switch.is_some() { 5.5 * r } else { r };
-            self.gfx.text(&o.label, tx, y + 1.1 * r, width - (tx - x) - room, 1.375 * r, 400, if on { T1 } else { T2 }, Align::Left, 0, 0.0);
+            self.gfx.text(&o.label, tx, y + 0.98 * r, width - (tx - x) - room, 1.375 * r, 400, if on { T1 } else { T2 }, Align::Left, 0, 0.0);
             if let Some(v) = &o.value {
-                self.gfx.text(v, x + width - 13.0 * r, y + 1.2 * r, 12.0 * r, 1.25 * r, 400, T3, Align::Right, 0, 0.0);
+                self.gfx.text(v, x + width - 13.0 * r, y + 1.06 * r, 12.0 * r, 1.25 * r, 400, T3, Align::Right, 0, 0.0);
             }
             if let Some(sw) = o.switch {
-                let s = Rect::new(x + width - r - 3.25 * r, y + r, 3.25 * r, 2.0 * r);
+                let s = Rect::new(x + width - r - 3.25 * r, y + 0.875 * r, 3.25 * r, 2.0 * r);
                 self.gfx.fill(s, if sw { ACCENT } else { RAISED }, r);
                 if !sw {
                     self.gfx.stroke(s.inset(0.5), LINE, r, 1.0);
@@ -720,14 +1076,27 @@ impl App {
                     self.gfx.text(&title, x + r, 3.0 * r, panel.w - 6.0 * r, 2.0 * r, 500, T1, Align::Left, 2, -0.02);
                     let th = self.gfx.text_height(&title, 2.0 * r, 500, panel.w - 6.0 * r, 2);
                     self.gfx.text(&sub, x + r, 3.0 * r + th + 0.5 * r, panel.w - 6.0 * r, 1.25 * r, 400, T3, Align::Left, 2, 0.0);
-                    // Long lists scroll so the focused option stays above the hints.
+                    // Long lists scroll by whole options so the focused one stays above the hints
+                    // and no option shows cut in half at either edge.
                     let start = 3.0 * r + th + 3.5 * r;
-                    let limit = h - 6.0 * r;
+                    let avail = h - 6.0 * r - start;
                     let width = panel.w - 4.0 * r;
-                    let upto: f32 = opts.iter().take(focus + 1).map(|o| self.opt_height(o, width) + 0.25 * r).sum();
-                    let off = (upto - (limit - start)).max(0.0);
-                    self.gfx.clip(Rect::new(panel.x, start - 0.5 * r, panel.w, limit - start + 0.5 * r));
-                    self.draw_options(&opts, focus, x, start - off, panel.w - 4.0 * r);
+                    let heights: Vec<f32> = opts.iter().map(|o| self.opt_height(o, width) + 0.25 * r).collect();
+                    let upto: f32 = heights.iter().take(focus + 1).sum();
+                    let (mut off, mut first) = (0.0, 0);
+                    while upto - off > avail + 0.5 && first < focus {
+                        off += heights[first];
+                        first += 1;
+                    }
+                    let mut shown = 0.0;
+                    for hgt in &heights[first..] {
+                        if shown + hgt > avail + 0.5 {
+                            break;
+                        }
+                        shown += hgt;
+                    }
+                    self.gfx.clip(Rect::new(panel.x, start - 0.5 * r, panel.w, shown + 0.5 * r));
+                    self.draw_options(&opts, focus, x, start - off, width);
                     self.gfx.unclip();
                     let fy = h - 3.0 * r - 1.125 * r;
                     let fx = self.hint(Key::Cross, "Select", x + r, fy, T2);
@@ -739,7 +1108,7 @@ impl App {
                     let tw = pw - 5.0 * r;
                     let tth = self.gfx.text_height(&title, 2.0 * r, 500, tw, 2);
                     let bh = self.gfx.text_height(&body, 1.375 * r, 400, tw, 6);
-                    let ph = 2.5 * r + tth + 0.75 * r + bh + 2.0 * r + opts.len() as f32 * 4.25 * r + 1.75 * r;
+                    let ph = 2.5 * r + tth + 0.75 * r + bh + 2.0 * r + opts.len() as f32 * 4.0 * r + 1.75 * r;
                     let p = Rect::new((w - pw) / 2.0, (h - ph) / 2.0, pw, ph);
                     self.gfx.fill(p, CARD, 20.0);
                     self.gfx.stroke(p.inset(0.5), LINE, 20.0, 1.0);
@@ -747,10 +1116,16 @@ impl App {
                     let by = p.y + 2.5 * r + tth + 0.75 * r;
                     self.gfx.text(&body, p.x + 2.5 * r, by, tw, 1.375 * r, 400, T2, Align::Left, 6, 0.0);
                     self.draw_options(&opts, focus, p.x + 1.5 * r, by + bh + 2.0 * r, pw - 3.0 * r);
+                    // Where the hint bar is: what ✕ and ○ do here.
+                    let hy = h - 2.5 * r;
+                    let hx = self.hint(Key::Cross, "Select", 4.0 * r, hy, T2);
+                    let back = if opts.iter().any(|o| matches!(o.act, Act::StayAwake)) { "Stay awake" } else { "Back" };
+                    self.hint(Key::Circle, back, hx, hy, T2);
                 }
                 Layer::Launch { item, at } => self.draw_launch(item, at, now),
                 Layer::Keyboard(kb) => self.draw_keyboard(&kb),
                 Layer::Welcome { opts, focus, at } => self.draw_welcome(&opts, focus, at, now),
+                Layer::Quick { focus, at } => self.draw_quick(focus, at, now),
             }
         }
     }
@@ -812,6 +1187,7 @@ impl App {
             KbPurpose::Search => "Search games and apps",
             KbPurpose::DcId => "Client ID",
             KbPurpose::DcSecret => "Client Secret",
+            KbPurpose::SpId => "Spotify Client ID",
             KbPurpose::Rename(_) => "Name",
         };
         // A secret is not shown on the TV.
@@ -945,9 +1321,9 @@ impl App {
         self.gfx.text(title, x, y + d1, width, 4.0 * r, 500, T1.alpha(p1), Align::Left, 2, -0.03);
         y += tth + 1.25 * r;
         let (p2, d2) = rise(2);
-        let body = "Your games and apps in one place, made for a controller. Press the PS button in any game to come back here.";
-        let bh = self.gfx.text_height(body, 1.5 * r, 400, width, 4);
-        self.gfx.text(body, x, y + d2, width, 1.5 * r, 400, T2.alpha(p2), Align::Left, 4, 0.0);
+        let body = format!("Your games, apps and music in one place, made for a controller. {} in any game to come back here, and again for the quick menu.", self.home_press());
+        let bh = self.gfx.text_height(&body, 1.5 * r, 400, width, 4);
+        self.gfx.text(&body, x, y + d2, width, 1.5 * r, 400, T2.alpha(p2), Align::Left, 4, 0.0);
         y += bh + 3.0 * r;
         let (p3, d3) = rise(3);
         if p3 > 0.0 {
@@ -964,7 +1340,9 @@ impl App {
         let p = ease((age / 260.0).clamp(0.0, 1.0)) as f32 * (1.0 - ease(((age - 5000.0) / 260.0).clamp(0.0, 1.0)) as f32);
         let w = 28.0 * r;
         let bh = if body.is_empty() { 0.0 } else { self.gfx.text_height(&body, r, 400, w - 2.5 * r, 3) + 0.25 * r };
-        let rect = Rect::new(self.gfx.width - 4.0 * r - w, 6.0 * r + (1.0 - p) * 8.0, w, 2.0 * r + 1.5 * r + bh);
+        // Beside a sheet, not over its title.
+        let right = if matches!(self.layers.last(), Some(Layer::Sheet { .. })) { self.gfx.width - 38.0 * r } else { self.gfx.width - 4.0 * r };
+        let rect = Rect::new(right - w, 6.0 * r + (1.0 - p) * 8.0, w, 2.0 * r + 1.5 * r + bh);
         self.gfx.fill(Rect::new(rect.x, rect.y + 4.0, rect.w, rect.h), Color(0.0, 0.0, 0.0, 0.2 * p), 14.0);
         self.gfx.fill(rect, CARD.alpha(p), 14.0);
         self.gfx.stroke(rect.inset(0.5), LINE.alpha(p), 14.0, 1.0);
@@ -987,12 +1365,15 @@ impl App {
     }
 }
 
-fn system_desc(key: &str) -> &'static str {
+/// A System tile's line under its name. `press`: how to come back ("Press the PS button").
+fn system_desc(key: &str, press: &str) -> String {
+    if key == "desktop" {
+        return format!("Shows the Windows desktop. {press} to come back");
+    }
     match key {
         "sleep" => "The PC sleeps until you wake it",
         "restart" => "Restarts the PC",
         "shutdown" => "Turns the PC off",
-        "desktop" => "Shows the Windows desktop. Press the PS button to come back",
         "quit" => "Closes Sofa completely",
         "bigpicture" => "Opens Steam in Big Picture mode",
         "settings" => "Start with Windows, buttons, browser and sounds",
@@ -1001,6 +1382,16 @@ fn system_desc(key: &str) -> &'static str {
         "sound" => "TV, headphones or the controller",
         "bluetooth" => "Pair a controller or headphones",
         _ => "",
+    }
+    .into()
+}
+
+/// Steam's total play time: "45 min in total", "1 hour in total", "73 hours in total".
+fn playtime_text(min: u32) -> String {
+    match (min, (min + 30) / 60) {
+        (0..=59, _) => format!("{min} min in total"),
+        (_, 1) => "1 hour in total".into(),
+        (_, h) => format!("{h} hours in total"),
     }
 }
 
@@ -1034,6 +1425,29 @@ fn civil_from_days(z: i64) -> (i64, usize) {
     let mp = (5 * doy + 2) / 153;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     (yoe + era * 400 + i64::from(m <= 2), (m - 1) as usize)
+}
+
+/// Today's date in the person's own long format ("Friday, November 27, 2026").
+fn date_text() -> String {
+    use windows::Win32::Globalization::{DATE_LONGDATE, GetDateFormatEx};
+    let mut buf = [0u16; 128];
+    // SAFETY: the buffer is passed with its length.
+    let n = unsafe { GetDateFormatEx(windows::core::PCWSTR::null(), DATE_LONGDATE, None, windows::core::PCWSTR::null(), Some(&mut buf), windows::core::PCWSTR::null()) };
+    String::from_utf16_lossy(&buf[..(n.max(1) - 1) as usize])
+}
+
+/// The time `minutes` from now, in the person's own format ("11:42 PM").
+fn clock_in(minutes: u32) -> String {
+    use windows::Win32::Globalization::{GetTimeFormatEx, TIME_NOSECONDS};
+    use windows::Win32::System::SystemInformation::GetLocalTime;
+    // SAFETY: plain call.
+    let mut t = unsafe { GetLocalTime() };
+    let total = (u32::from(t.wHour) * 60 + u32::from(t.wMinute) + minutes) % (24 * 60);
+    (t.wHour, t.wMinute, t.wSecond) = ((total / 60) as u16, (total % 60) as u16, 0);
+    let mut buf = [0u16; 64];
+    // SAFETY: the time and the buffer are locals passed with their sizes.
+    let n = unsafe { GetTimeFormatEx(windows::core::PCWSTR::null(), TIME_NOSECONDS, Some(&t), windows::core::PCWSTR::null(), Some(&mut buf)) };
+    String::from_utf16_lossy(&buf[..(n.max(1) - 1) as usize])
 }
 
 /// The time in the person's own format, without seconds.

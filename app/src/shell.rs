@@ -162,6 +162,20 @@ pub fn exe_of(pid: u32) -> String {
     }
 }
 
+/// When a window's process started (epoch ms): how long a game has been running.
+pub fn started(h: isize) -> Option<f64> {
+    // SAFETY: a limited-query handle, closed before returning; the times are locals.
+    unsafe {
+        let p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid(h)).ok()?;
+        let (mut created, mut exited, mut kernel, mut user) = (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
+        let ok = GetProcessTimes(p, &mut created, &mut exited, &mut kernel, &mut user).is_ok();
+        let _ = CloseHandle(p);
+        // FILETIME counts 100 ns since 1601; the Unix epoch is 11 644 473 600 s later.
+        let t = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+        (ok && t > 0).then_some((t / 10_000) as f64 - 11_644_473_600_000.0)
+    }
+}
+
 fn exe_name(h: isize) -> String {
     let e = exe_of(pid(h)).to_lowercase();
     e.rsplit('\\').next().unwrap_or("").to_owned()

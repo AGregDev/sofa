@@ -645,10 +645,17 @@ impl Pipe {
 
 // ---------- HTTPS ----------
 
-/// One HTTPS request with WinHTTP: (status, body).
+/// One HTTPS request to Discord, a form body when given: (status, body).
 fn https(method: &str, host: &str, path: &str, form: Option<&str>) -> std::result::Result<(u32, Vec<u8>), String> {
+    let headers = if form.is_some() { "Content-Type: application/x-www-form-urlencoded\r\n" } else { "" };
+    request(method, host, path, headers, form.unwrap_or("").as_bytes()).map_err(|_| "No connection to Discord".to_owned())
+}
+
+/// One HTTPS request with WinHTTP (`headers`: lines ending in CRLF): (status, body). Spotify
+/// uses it too.
+pub(crate) fn request(method: &str, host: &str, path: &str, headers: &str, body: &[u8]) -> std::result::Result<(u32, Vec<u8>), String> {
     use windows::Win32::Networking::WinHttp::*;
-    let offline = || "No connection to Discord".to_owned();
+    let offline = || format!("No connection to {host}");
     // SAFETY: WinHTTP handles opened and closed here; buffers outlive the calls.
     unsafe {
         let session = WinHttpOpen(w!("Sofa"), WINHTTP_ACCESS_TYPE(4), PCWSTR::null(), PCWSTR::null(), 0);
@@ -666,8 +673,7 @@ fn https(method: &str, host: &str, path: &str, form: Option<&str>) -> std::resul
                 if req.is_null() {
                     return Err(offline());
                 }
-                let body = form.unwrap_or("").as_bytes();
-                let headers: Vec<u16> = if form.is_some() { "Content-Type: application/x-www-form-urlencoded\r\n".encode_utf16().collect() } else { Vec::new() };
+                let headers: Vec<u16> = headers.encode_utf16().collect();
                 let ptr = (!body.is_empty()).then(|| body.as_ptr().cast::<core::ffi::c_void>());
                 WinHttpSendRequest(req, (!headers.is_empty()).then_some(&headers[..]), ptr, body.len() as u32, body.len() as u32, 0).map_err(|_| offline())?;
                 WinHttpReceiveResponse(req, std::ptr::null_mut()).map_err(|_| offline())?;
@@ -702,7 +708,7 @@ fn https(method: &str, host: &str, path: &str, form: Option<&str>) -> std::resul
     }
 }
 
-fn url_encode(s: &str) -> String {
+pub(crate) fn url_encode(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
@@ -802,7 +808,7 @@ fn aes_gcm_open(key: &[u8], nonce: &[u8], ct: &[u8], tag: &[u8]) -> Option<Vec<u
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-fn b64_encode(b: &[u8]) -> String {
+pub(crate) fn b64_encode(b: &[u8]) -> String {
     let mut s = String::with_capacity(b.len().div_ceil(3) * 4);
     for c in b.chunks(3) {
         let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));

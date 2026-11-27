@@ -43,7 +43,7 @@ function Check([string]$name, [bool]$ok, [string]$detail = '') {
 }
 
 # What a QA run must never touch: the real settings, start-with-Windows, Steam's setting,
-# the Start menu shortcut and the Installed apps entry.
+# Game Bar's use of the Xbox button, the Start menu shortcut and the Installed apps entry.
 function Fingerprint {
   $parts = @()
   $real = Join-Path $env:APPDATA 'sofa\sofa.json'
@@ -58,13 +58,15 @@ function Fingerprint {
     }
     $parts += 'steam=' + ($vals -join ',')
   }
+  $gameBar = (Get-ItemProperty 'HKCU:\Software\Microsoft\GameBar' -ErrorAction SilentlyContinue).UseNexusForGameBarEnabled
+  $parts += "gamebar=$gameBar"
   $parts += 'link=' + (Test-Path (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Sofa.lnk'))
   $parts += 'uninstall=' + (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Sofa')
   $parts -join '|'
 }
 
 $VK = @{ Left = 0x25; Up = 0x26; Right = 0x27; Down = 0x28; Enter = 0x0D; Esc = 0x1B; Back = 0x08; Home = 0x24;
-         E = 0x45; Q = 0x51; O = 0x4F; M = 0x4D; F = 0x46 }
+         E = 0x45; Q = 0x51; O = 0x4F; M = 0x4D; F = 0x46; VolUp = 0xBB; VolDown = 0xBD }
 
 function Key([string]$k, [int]$times = 1, [int]$wait = 260) {
   for ($i = 0; $i -lt $times; $i++) {
@@ -164,26 +166,89 @@ $s = State
 $rowsHome = [int]$s.rows
 Check 'H3 Down moves to the next row' ($rowsHome -lt 2 -or $s.focus.StartsWith('1,')) $s.focus
 Shot '03-home-row2'
+Key Esc
+$s = State
+Check 'H4 Back on Home returns to the first tile' ($s.focus -eq '0,0' -and $s.tab -eq 'home' -and $s.layer -eq 'none') "$($s.tab) $($s.focus) $($s.layer)"
+
+# ---------- Quick menu (PS on Home) ----------
+# A QA run has a made-up track playing ("Night Drive"), made-up sound devices (a TV and
+# headphones, 40 %, microphone on) and changes only those; the sleep timer never sleeps the PC.
 Key Home
 $s = State
-Check 'H4 Home goes back to the first tile' ($s.focus -eq '0,0' -and $s.tab -eq 'home') "$($s.tab) $($s.focus)"
+Check 'U1 PS on Home opens the quick menu, what is playing first' ($s.layer -eq 'quick:music') $s.layer
+Shot '16-quick-menu' 700
+Key Enter
+Check 'U2 Cross pauses what is playing' ((State).music -eq 'paused') "music $((State).music)"
+Key Enter
+Key Right 2
+Check 'U3 Right moves along the quick menu' ((State).layer -eq 'quick:volume') (State).layer
+Key VolUp
+Check 'U4 R2 raises the volume a step' ((State).volume -eq '44') "volume $((State).volume)"
+Key VolDown
+Key Right
+Key Enter
+Check 'U5 The microphone mutes' ((State).mic -eq 'muted') "mic $((State).mic)"
+Key Enter
+Key Right
+Key Enter
+Check 'U6 The sleep timer starts at 30 minutes' ((State).sleep -eq '30' -and (State).layer -eq 'quick:timer') "sleep $((State).sleep), $((State).layer)"
+Shot '17-quick-timer' 500
+Key Enter 3
+Check 'U7 The sleep timer steps up to 2 hours' ((State).sleep -eq '120') "sleep $((State).sleep)"
+Key Enter
+Check 'U8 then turns off' ((State).sleep -eq 'off') "sleep $((State).sleep)"
+Key Left 3
+Key Enter
+Check 'U9 Sound output lists the outputs, the one in use in focus' ((State).layer -eq 'sheet:Sound output:0') (State).layer
+Shot '18-sound-output' 500
+Key Down
+Key Enter
+$s = State
+Check 'U10 Choosing an output switches the sound and returns to the menu' ($s.output -eq 'qa-headphones' -and $s.layer -eq 'quick:output') "$($s.output), $($s.layer)"
+Key Home
+Check 'U11 PS again closes the quick menu' ((State).layer -eq 'none') (State).layer
+[QaWin]::PostMessage($script:h, 0x8000 + 13, [IntPtr]0, [IntPtr]0) | Out-Null
+Start-Sleep -Milliseconds 500
+$s = State
+Check 'U12 The sleep timer warns a minute before the PC sleeps' ($s.layer -like 'dialog:Sleeping in*') $s.layer
+Shot '19-sleep-warning' 600
+Key Enter
+$s = State
+Check 'U13 Stay awake turns the timer off' ($s.sleep -eq 'off' -and $s.layer -eq 'none') "sleep $($s.sleep), $($s.layer)"
 
 # ---------- Tabs ----------
 $tabs = @()
-for ($i = 0; $i -lt 6; $i++) { Key E 1 450; $tabs += (State).tab; if ((State).tab -eq 'games') { Shot '04-games' } ; if ((State).tab -eq 'social') { Shot '05-social' } ; if ((State).tab -eq 'system') { Shot '05-system' } }
-Check 'T1 R1 walks the tabs and wraps' (($tabs -join ',') -eq 'games,media,apps,social,system,home') ($tabs -join ',')
+for ($i = 0; $i -lt 7; $i++) { Key E 1 450; $tabs += (State).tab; if ((State).tab -eq 'games') { Shot '04-games' } ; if ((State).tab -eq 'social') { Shot '05-social' } ; if ((State).tab -eq 'system') { Shot '05-system' } }
+Check 'T1 R1 walks the tabs and wraps' (($tabs -join ',') -eq 'games,media,music,apps,social,system,home') ($tabs -join ',')
 Key Q
 Check 'T2 L1 goes back a tab' ((State).tab -eq 'system') (State).tab
 Key Esc
 Check 'T3 Back returns to Home' ((State).tab -eq 'home') (State).tab
+
+# ---------- Spotify (Music tab) ----------
+# A QA run has a made-up library (Liked Songs, three playlists, two albums) and plays nothing.
+Key E 3
+$s = State
+Check 'SP1 The Music tab lists Liked Songs, playlists and albums' ($s.tab -eq 'music' -and $s.rowkeys -eq 'playlists,albums' -and $s.tile -eq 'mu:spotify:user:qa:collection') "$($s.tab) $($s.rowkeys) $($s.tile)"
+Shot '20-music' 900
+Key Enter
+Check 'SP2 Cross plays it on this PC' ((State).toast -eq 'Playing Liked Songs') (State).toast
+Key Right
+Key M
+$s = State
+Check 'SP3 Triangle offers Play, Shuffle play and Open in Spotify' ($s.layer -eq 'sheet:Late Night Drive:0') $s.layer
+Shot '21-music-options' 500
+Key Esc
+Key Esc
+Check 'SP4 Home has a Music row' ((State).rowkeys -match '(^|,)music(,|$)') (State).rowkeys
 
 # ---------- Settings ----------
 Key O
 $s = State
 Check 'C1 Options opens Settings' ($s.layer -eq 'sheet:Settings:0') $s.layer
 Shot '06-settings' 500
-Key Down 7
-Check 'C2 Settings: focus moves down the list' ((State).layer -eq 'sheet:Settings:7') (State).layer
+Key Down 8
+Check 'C2 Settings: focus moves down the list' ((State).layer -eq 'sheet:Settings:8') (State).layer
 Key Enter
 Check 'C3 Settings: Reduce motion switches on' ((Settings).settings.motion -eq 'reduced') ((Settings).settings.motion)
 Key Enter
@@ -192,11 +257,19 @@ Key Down
 Key Enter
 Check 'C5 Settings: Show hidden apps' ((Settings).settings.showHidden -eq $true)
 Key Enter
-Key Up 6
+Key Up 7
 Key Enter
 Check 'C6 Settings: Home button choice' ((Settings).settings.homeButton -eq 'combo') ((Settings).settings.homeButton)
 Key Enter
 Check 'C7 Settings: back to the PS button' ((Settings).settings.homeButton -eq 'ps') ((Settings).settings.homeButton)
+Key Down 2
+Key Enter
+$light = (Settings).settings.controllerLight
+Key Enter
+$light += ',' + (Settings).settings.controllerLight
+Key Enter
+$light += ',' + (Settings).settings.controllerLight
+Check 'C9 Settings: Controller light cycles (saved)' ($light -eq 'amber,off,follow') $light
 Key Esc
 Check 'C8 Back closes Settings' ((State).layer -eq 'none') (State).layer
 
@@ -219,7 +292,7 @@ Key Esc
 Check 'K5 Back closes the keyboard' ((State).layer -eq 'none') (State).layer
 
 # ---------- Item options ----------
-Key Home
+Key Esc
 $tile = (State).tile
 if ($tile -like 'nav:*' -or $tile -like 'system:*' -or -not $tile) { Key Right; $tile = (State).tile }
 Key M
@@ -252,7 +325,7 @@ Start-Sleep -Milliseconds 400
 Check 'I6 An empty name brings the original back' ($null -eq (Settings).overrides.$tile) $tile
 
 # ---------- Launch ----------
-Key Home
+Key Esc
 $tile = (State).tile
 Key Enter 1 500
 $s = State
@@ -278,8 +351,9 @@ Shot '14-running-menu' 400
 Key Esc
 Stop-Process -Id $stand.Id -Force
 Start-Sleep -Milliseconds 400
-Key Home
+Key Home  # PS on Home: the quick menu opens, and Running drops apps that closed
 Check 'R3 A closed app loses its card' ((State).running -eq '0') "running $((State).running)"
+Key Home
 
 # ---------- One Sofa at a time ----------
 $second = Start-Process $Exe -ArgumentList '--qa', '--size', '1600x900' -PassThru
@@ -287,7 +361,7 @@ $gone = $second.WaitForExit(4000)
 Check 'O1 A second start hands over to the first' ($gone -and -not $p.HasExited)
 
 # ---------- Memory and CPU ----------
-Key Home
+Key Esc
 Start-Sleep -Seconds 3
 $p.Refresh()
 $ws = [math]::Round($p.WorkingSet64 / 1MB, 1); $priv = [math]::Round($p.PrivateMemorySize64 / 1MB, 1)
@@ -310,8 +384,8 @@ Check 'P5 Draws again after giving memory back' (-not $p.HasExited -and (State).
 
 # ---------- Quit ----------
 Key O
-Key Down 11
-Check 'Q1 Quit Sofa is the last setting' ((State).layer -eq 'sheet:Settings:11') (State).layer
+Key Down 12
+Check 'Q1 Quit Sofa is the last setting' ((State).layer -eq 'sheet:Settings:12') (State).layer
 Key Enter
 $quit = $p.WaitForExit(4000)
 Check 'Q2 Quit Sofa closes it' $quit
@@ -319,7 +393,7 @@ Check 'Q2 Quit Sofa closes it' $quit
 # ---------- Second start ----------
 $p = Start-Sofa
 Start-Sleep -Milliseconds 800
-Key Home
+Key Esc
 $s = State
 Check 'Q3 No welcome once set up' ($s.layer -eq 'none') $s.layer
 Check 'Q4 Settings were kept' ((Settings).settings.controllerLayout -eq 'ps')

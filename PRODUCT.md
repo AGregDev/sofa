@@ -23,7 +23,8 @@ to start a game or switch apps.
    Go to desktop. The PS button always comes back to Sofa.
 2. **PS button = Home.** From any game or app, PS opens Sofa with that app first,
    ready to Resume, Close or Force close. Picking another game while one runs asks
-   first, like a PS5.
+   first, like a PS5. On Home, PS opens the quick menu: what is playing, sound,
+   microphone, the sleep timer and power, without leaving the couch.
 3. **Everything from the controller.** Navigation, search with an on-screen
    keyboard (with Paste), item options, settings and the first-run screen all work
    with the pad. The keyboard works too.
@@ -34,10 +35,26 @@ to start a game or switch apps.
    comes from the games' own art. No lag while moving, no flicker, no surprises,
    and no memory taken from the game you are playing.
 
-## Features (2.1)
+## Features (2.2)
 
 - Home rows: Running, Discord voice, Jump back in, Favorites, Games, Media, Apps
-  (each long row ends with an "All ..." tile).
+  (each long row ends with an "All ..." tile). ○ on Home returns to the first tile.
+- The hero says what matters before you press ✕: how long a running game has been
+  going ("Running for 1 h 12 min"), and for Steam games when you last played and
+  your total play time.
+- **Quick menu** (PS on Home; PS or ○ closes it): a large clock with the date, when
+  the PC will sleep and the controller's charge, then
+  - **Now playing**: the track and its art from Spotify, a browser or any player in
+    Windows' media flyout; ✕ plays or pauses, L1 and R1 skip. Players built for a
+    mouse (Spotify) are controlled without touching their window.
+  - **Sound output**: TV, headphones, speakers or the controller, by name.
+  - **Volume** and mute (L2 and R2 change the volume anywhere in Sofa, shown in
+    the top bar).
+  - **Microphone** mute (in Discord while you are in a voice channel).
+  - **Sleep timer**: 30 min, 1 h, 1 h 30 min, 2 h. A minute before the end Sofa comes
+    forward with a countdown (Stay awake, Sleep now); games and videos wait in sleep.
+  - **Controller light** and **Power** (sleep, restart, shut down, desktop, quit).
+  - ≡ opens Settings from here.
 - Running cards name the program itself (Firefox, not the page it shows) with its
   own icon; the page or document shows beside "Running" in the hero.
 - PS button home with the running app first; resume, close, force close; switch
@@ -49,6 +66,13 @@ to start a game or switch apps.
   after asking while it is open) and pushes Steam back down if it grabs the screen.
 - DualSense without drivers over USB or Bluetooth: buttons (also while a game has
   focus), battery and charging. XInput pads with the Guide button.
+- DualSense lights: the lightbar takes the focused game's colour once focus rests
+  (or amber, or off), player 1's light shows, and the **mute button** mutes the
+  microphone from any game with its LED showing it, like a PS5. Sofa writes only
+  on change, never on focus moves, and the lightbar only while Sofa is in front.
+- While Sofa is in front it reads the controller itself, so keys other programs make
+  from the same buttons (Steam's desktop layout) are held back: ○ is always Back.
+- Picking an app that is already open switches to it instead of starting a second copy.
 - Button layouts: Match controller, PlayStation, Xbox (A B X Y) or Nintendo
   (confirm and back swapped). Home button: PS, or Create + Options.
 - Search with an on-screen keyboard (Shift, Space, Delete, Paste, Clear, Done) or a
@@ -63,7 +87,15 @@ to start a game or switch apps.
 - Discord voice: your channel with Mute, Deafen and Leave, channels you joined
   recently (on Home), your servers and their voice channels (Social tab), and a
   one-time Connect walkthrough. A sign-in made in Sofa 1.x carries over.
-- First-run screen: start with Windows, keep Steam off the PS button, button layout.
+- **Spotify from the controller** (Music tab, and a Music row on Home): Liked Songs,
+  your playlists and saved albums with their covers; ✕ plays one on this PC's Spotify
+  app (started when needed), △ offers Shuffle play and Open in Spotify. A one-time
+  Connect walkthrough: you make a Spotify app (Spotify allows apps in development
+  only for accounts with Premium) and approve Sofa once in the browser; Sofa never
+  sees the password and keeps the sign-in encrypted for this Windows account.
+- First-run screen: start with Windows, keep Steam off the PS button, button layout; with an
+  Xbox controller also "Keep Game Bar off the Xbox button" (Windows' Game Bar otherwise opens
+  on the same button). Text names the button on the controller in use (PS or Xbox button).
 - Interface sounds, reduced motion, notices (controller connected, battery low,
   Steam fixed).
 - Go to desktop and Quit Sofa; Sleep, Restart, Shut down; Steam Big Picture;
@@ -76,10 +108,8 @@ to start a game or switch apps.
 These came with the Electron app and are planned for the native one. Each needs a
 native replacement for something the browser engine gave for free.
 
-- **Headphones in the controller take the sound**, and the sound output switcher:
-  needs Windows' audio endpoint API (the policy config interface).
-- **DualSense lightbar, player light and mute LED**: needs HID output reports
-  (careful: output reports on every move caused lag over Bluetooth in 1.x).
+- **Headphones in the controller take the sound** by themselves: needs endpoint
+  notifications (the quick menu already switches to the controller by hand).
 - **Custom covers** from Pictures, Downloads or the Desktop, and **uninstalling** games
   and apps from their options.
 - The longer 1.x setup (controller check, Windows settings worth changing).
@@ -94,6 +124,9 @@ native replacement for something the browser engine gave for free.
   directly instead, so nothing extra is installed.
 - **A browser engine.** YouTube TV and streaming open in the browser you already
   have, with its own TV profile (ADR-004), instead of inside Sofa.
+- **Spotify's TV interface.** Unlike YouTube, Spotify has no TV interface a PC
+  browser can open; its web player is built for a mouse. Sofa shows your Spotify
+  library itself (Music tab) and controls playback (quick menu) instead.
 
 ## Constraints we live with
 

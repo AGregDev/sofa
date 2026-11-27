@@ -20,6 +20,7 @@ fn defaults() -> Map<String, Value> {
             "homeButton": "ps",
             "controllerLayout": "auto",
             "steamGuide": true,
+            "gameBarOff": true,
             "padAudio": true,
             "controllerLight": "follow",
             "browser": "auto",

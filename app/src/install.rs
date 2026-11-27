@@ -69,6 +69,26 @@ fn close(key: HKEY) {
     }
 }
 
+const GAME_BAR: &str = "Software\\Microsoft\\GameBar";
+
+/// Whether the Xbox button opens Game Bar: Windows' "Open Xbox Game Bar using this button on a
+/// controller" (`UseNexusForGameBarEnabled`, on when it was never set).
+pub fn game_bar_button() -> bool {
+    let Some(key) = open_key(GAME_BAR, false) else { return true };
+    let (mut value, mut size) = (1u32, 4u32);
+    // SAFETY: reads a DWORD into a local of that size.
+    let ok = unsafe { RegQueryValueExW(key, w!("UseNexusForGameBarEnabled"), None, None, Some((&mut value as *mut u32).cast()), Some(&mut size)) }.is_ok();
+    close(key);
+    !ok || value != 0
+}
+
+/// Lets the Xbox button open Game Bar, or keeps it for Sofa.
+pub fn set_game_bar_button(on: bool) {
+    let Some(key) = open_key(GAME_BAR, true) else { return };
+    set_dword(key, "UseNexusForGameBarEnabled", u32::from(on));
+    close(key);
+}
+
 /// Start Sofa with Windows (the Run key under the current user).
 pub fn set_autostart(on: bool) {
     let Some(key) = open_key(RUN, true) else { return };

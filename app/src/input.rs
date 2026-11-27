@@ -5,6 +5,10 @@
 //!   to full reports), which keeps working while a game has focus, so the PS button always
 //!   reaches Sofa;
 //! - the keyboard, from the window's messages.
+//!
+//! The same thread writes the DualSense's lights (lightbar, player light, mute LED) when Sofa
+//! asks for a change: only on change, never per focus move (output reports on every move
+//! lagged Bluetooth pads in 1.x), and the lightbar only while Sofa is in front.
 
 use std::sync::{Arc, Mutex};
 use windows::Win32::Devices::DeviceAndDriverInstallation::*;
@@ -18,6 +22,20 @@ use windows::core::*;
 
 pub const WM_PAD_HOME: u32 = 0x8000 + 2; // WM_APP + 2: the Home button, from any app
 pub const WM_PAD_INPUT: u32 = 0x8000 + 3; // WM_APP + 3: the DualSense's buttons changed
+pub const WM_PAD_MUTE: u32 = 0x8000 + 12; // WM_APP + 12: the DualSense's mute button, from any app
+
+/// What Sofa wants the DualSense to show. The UI sets it; the controller's thread sends it
+/// when it differs from what was sent.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct Lights {
+    /// Sofa may write at all (never in a QA run: it must not touch the real controller).
+    pub armed: bool,
+    /// Sofa is in front: the lightbar and the player light are Sofa's. Behind a game only the
+    /// mute LED is (the person pressed the mute button), so games keep their own lights.
+    pub front: bool,
+    pub rgb: (u8, u8, u8),
+    pub mute: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Action {
@@ -99,6 +117,7 @@ pub struct Input {
     /// button is left to Steam or the Game Bar (Settings, "Home button").
     pub ps_home: bool,
     pub ds: Arc<Mutex<(Pad, PadInfo)>>,
+    lights: Arc<Mutex<Lights>>,
 }
 
 impl Input {
@@ -112,9 +131,10 @@ impl Input {
             })
         };
         let ds = Arc::new(Mutex::new((Pad::default(), PadInfo::default())));
-        let shared = ds.clone();
+        let lights = Arc::new(Mutex::new(Lights::default()));
+        let (shared, wanted) = (ds.clone(), lights.clone());
         let h = hwnd.0 as isize;
-        let _ = std::thread::Builder::new().name("dualsense".into()).spawn(move || dualsense_thread(shared, h, start));
+        let _ = std::thread::Builder::new().name("dualsense".into()).spawn(move || dualsense_thread(shared, wanted, h, start));
         Input {
             layout: "auto".into(),
             kind: PadKind::PlayStation,
@@ -130,6 +150,14 @@ impl Input {
             home_held: false,
             ps_home: true,
             ds,
+            lights,
+        }
+    }
+
+    /// Asks for the DualSense's lights; the controller's thread sends them if they changed.
+    pub fn set_lights(&self, l: Lights) {
+        if let Ok(mut g) = self.lights.lock() {
+            *g = l;
         }
     }
 
@@ -150,7 +178,11 @@ impl Input {
     /// pad (Steam's desktop layout turns the pad into keys, so each press can arrive twice).
     pub fn key(&mut self, action: Action, now: f64) -> Option<Action> {
         let i = BUTTONS.iter().position(|(_, a)| *a == action).unwrap_or(0);
-        if self.held[i] || now - self.pad_active_at < 400.0 || now - self.last_pad_at.get(&action).copied().unwrap_or(-1e9) < 250.0 {
+        // A DualSense button down right now: the key is that press, translated by another
+        // program (Steam's desktop layout sends Enter for ○), even before the loop polled it.
+        let (pad, info) = self.ds.lock().map(|g| *g).unwrap_or_default();
+        let pad_down = info.connected && now - pad.at < 1000.0 && pad.buttons.iter().any(|&b| b);
+        if pad_down || self.held[i] || now - self.pad_active_at < 400.0 || now - self.last_pad_at.get(&action).copied().unwrap_or(-1e9) < 250.0 {
             return None;
         }
         self.last_key_at.insert(action, now);
@@ -333,6 +365,16 @@ impl Input {
     pub fn xinput_active(&self) -> bool {
         self.xconnected.iter().any(|&c| c)
     }
+
+    /// Whether an Xbox (XInput) pad is connected right now, asked of XInput directly (before the
+    /// first poll `xinput_active` only assumes so).
+    pub fn xbox_now(&self) -> bool {
+        (0..4u32).any(|i| {
+            let mut st = XINPUT_STATE::default();
+            // SAFETY: writes into a local struct.
+            unsafe { XInputGetState(i, &mut st) == 0 }
+        })
+    }
 }
 
 // ---------- DualSense over HID ----------
@@ -340,7 +382,9 @@ impl Input {
 const SONY: u16 = 0x054c;
 const MODELS: [u16; 2] = [0x0ce6, 0x0df2]; // DualSense, DualSense Edge
 
-fn find_dualsense() -> Option<(HANDLE, bool, usize)> {
+/// The first DualSense: its handle, whether it is on Bluetooth, and its input and output
+/// report lengths (Windows wants writes padded to the longest output report).
+fn find_dualsense() -> Option<(HANDLE, bool, usize, usize)> {
     // SAFETY: SetupAPI enumeration with buffers sized as the API reports; handles closed on
     // every path that does not return them.
     unsafe {
@@ -387,7 +431,7 @@ fn find_dualsense() -> Option<(HANDLE, bool, usize)> {
                 continue;
             }
             let bt = caps.OutputReportByteLength >= 78;
-            found = Some((h, bt, caps.InputReportByteLength as usize));
+            found = Some((h, bt, caps.InputReportByteLength as usize, caps.OutputReportByteLength as usize));
             break;
         }
         let _ = SetupDiDestroyDeviceInfoList(set);
@@ -395,7 +439,52 @@ fn find_dualsense() -> Option<(HANDLE, bool, usize)> {
     }
 }
 
-fn dualsense_thread(shared: Arc<Mutex<(Pad, PadInfo)>>, hwnd: isize, start: std::time::Instant) {
+/// CRC-32 (IEEE, reflected), as the DualSense checks it on Bluetooth output reports.
+pub(crate) fn crc32(parts: &[&[u8]]) -> u32 {
+    let mut c = 0xffff_ffffu32;
+    for b in parts.iter().flat_map(|p| p.iter()) {
+        c ^= u32::from(*b);
+        for _ in 0..8 {
+            c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+        }
+    }
+    !c
+}
+
+/// A DualSense output report, laid out as Linux's hid-playstation does: report 0x02 over USB,
+/// report 0x31 over Bluetooth (sequence number, tag, then a CRC-32 seeded with 0xa2). `full`
+/// sets the lightbar, the player light and the mute LED; otherwise only the mute LED. `fade`
+/// also fades out the blue light the controller shows at power-on (once per connection).
+/// Padded with zeros to `len`, the longest output report Windows expects.
+pub(crate) fn output_report(l: &Lights, full: bool, fade: bool, bt: bool, seq: u8, len: usize) -> Vec<u8> {
+    let mut c = [0u8; 47];
+    c[1] = 0x01; // the mute LED is set
+    c[8] = u8::from(l.mute);
+    if full {
+        c[1] |= 0x04 | 0x10; // and the lightbar and the player light
+        if fade {
+            c[38] = 0x02;
+            c[41] = 0x02;
+        }
+        c[43] = 0x04; // player 1: the centre light
+        (c[44], c[45], c[46]) = l.rgb;
+    }
+    let mut r = vec![0u8; len.max(if bt { 78 } else { 48 })];
+    if bt {
+        r[0] = 0x31;
+        r[1] = (seq & 0x0f) << 4;
+        r[2] = 0x10;
+        r[3..50].copy_from_slice(&c);
+        let crc = crc32(&[&[0xa2], &r[..74]]);
+        r[74..78].copy_from_slice(&crc.to_le_bytes());
+    } else {
+        r[0] = 0x02;
+        r[1..48].copy_from_slice(&c);
+    }
+    r
+}
+
+fn dualsense_thread(shared: Arc<Mutex<(Pad, PadInfo)>>, wanted: Arc<Mutex<Lights>>, hwnd: isize, start: std::time::Instant) {
     let now = || start.elapsed().as_secs_f64() * 1000.0;
     let post = |msg: u32, w: usize| {
         // SAFETY: posting to our window; a closed window drops it.
@@ -404,10 +493,12 @@ fn dualsense_thread(shared: Arc<Mutex<(Pad, PadInfo)>>, hwnd: isize, start: std:
         }
     };
     loop {
-        let Some((h, bt, len)) = find_dualsense() else {
+        let Some((h, bt, len, out_len)) = find_dualsense() else {
             std::thread::sleep(std::time::Duration::from_secs(3));
             continue;
         };
+        // What the controller shows, as last sent on this connection.
+        let (mut sent, mut faded, mut seq, mut retry_at) = (None::<Lights>, false, 0u8, 0.0f64);
         if bt {
             // Reading the calibration report switches a Bluetooth DualSense to full reports.
             let mut feature = [0u8; 41];
@@ -416,7 +507,7 @@ fn dualsense_thread(shared: Arc<Mutex<(Pad, PadInfo)>>, hwnd: isize, start: std:
             let _ = unsafe { HidD_GetFeature(h, feature.as_mut_ptr().cast(), feature.len() as u32) };
         }
         let mut buf = vec![0u8; len.max(78)];
-        let (mut ps_held, mut combo_held, mut last_sig) = (false, false, 0u32);
+        let (mut ps_held, mut combo_held, mut mute_held, mut last_sig) = (false, false, false, 0u32);
         loop {
             let mut read = 0u32;
             // SAFETY: blocking read into our buffer.
@@ -477,6 +568,31 @@ fn dualsense_thread(shared: Arc<Mutex<(Pad, PadInfo)>>, hwnd: isize, start: std:
             }
             ps_held = on[16];
             combo_held = combo;
+            // The mute button, like on a PS5: Sofa mutes the microphone from any app.
+            let mute = b2 & 0x04 != 0;
+            if mute && !mute_held {
+                post(WM_PAD_MUTE, 0);
+            }
+            mute_held = mute;
+            // Lights: written here, between reads, only when what Sofa wants changed.
+            let want = wanted.lock().map(|g| *g).unwrap_or_default();
+            let full = want.armed && want.front && sent != Some(want);
+            let led = want.armed && !want.front && sent.is_none_or(|s| s.mute != want.mute);
+            let t = now();
+            if (full || led) && t >= retry_at {
+                let report = output_report(&want, full, full && !faded, bt, seq, out_len);
+                seq = seq.wrapping_add(1);
+                let mut wrote = 0u32;
+                // SAFETY: a synchronous write of our own buffer; no read is pending on this
+                // handle (this thread does both, one after the other).
+                if unsafe { WriteFile(h, Some(&report), Some(&mut wrote), None) }.is_ok() {
+                    faded |= full;
+                    // Behind a game only the LED changed; the lightbar is the game's.
+                    sent = Some(if full { want } else { Lights { front: false, mute: want.mute, ..sent.unwrap_or(want) } });
+                } else {
+                    retry_at = t + 2000.0;
+                }
+            }
         }
         // SAFETY: closing the handle this loop opened.
         unsafe {
@@ -485,5 +601,53 @@ fn dualsense_thread(shared: Arc<Mutex<(Pad, PadInfo)>>, hwnd: isize, start: std:
         if let Ok(mut g) = shared.lock() {
             g.1 = PadInfo::default();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crc32_matches_the_standard_check_value() {
+        assert_eq!(crc32(&[b"123456789"]), 0xcbf4_3926);
+        assert_eq!(crc32(&[b"1234", b"56789"]), 0xcbf4_3926);
+    }
+
+    #[test]
+    fn usb_report_sets_lightbar_player_light_and_mute_led() {
+        let l = Lights { armed: true, front: true, rgb: (10, 20, 30), mute: true };
+        let r = output_report(&l, true, true, false, 0, 64);
+        assert_eq!(r.len(), 64);
+        assert_eq!(r[0], 0x02);
+        assert_eq!(r[1], 0x00, "no rumble");
+        assert_eq!(r[2], 0x01 | 0x04 | 0x10);
+        assert_eq!(r[9], 1, "mute LED on");
+        assert_eq!((r[39], r[42]), (0x02, 0x02), "start-up light fades out");
+        assert_eq!(r[44], 0x04, "player 1");
+        assert_eq!((r[45], r[46], r[47]), (10, 20, 30));
+    }
+
+    #[test]
+    fn led_only_report_leaves_the_lightbar_alone() {
+        let l = Lights { armed: true, front: false, rgb: (200, 0, 0), mute: true };
+        let r = output_report(&l, false, false, false, 0, 48);
+        assert_eq!(r[2], 0x01);
+        assert_eq!(r[9], 1);
+        assert_eq!((r[45], r[46], r[47]), (0, 0, 0));
+        assert_eq!(r[39], 0);
+    }
+
+    #[test]
+    fn bluetooth_report_carries_sequence_tag_and_crc() {
+        let l = Lights { armed: true, front: true, rgb: (1, 2, 3), mute: false };
+        let r = output_report(&l, true, false, true, 5, 547);
+        assert_eq!(r.len(), 547);
+        assert_eq!((r[0], r[1], r[2]), (0x31, 0x50, 0x10));
+        assert_eq!(r[3 + 1], 0x01 | 0x04 | 0x10);
+        assert_eq!((r[3 + 44], r[3 + 45], r[3 + 46]), (1, 2, 3));
+        let crc = crc32(&[&[0xa2], &r[..74]]);
+        assert_eq!(r[74..78], crc.to_le_bytes());
+        assert!(r[78..].iter().all(|&b| b == 0));
     }
 }

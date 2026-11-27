@@ -2,10 +2,13 @@
 //! Layout and motion follow Sofa 1.x (`renderer/app.js`, `style.css`): rem = screen height /
 //! 67.5, one easing curve, warm graphite with one amber accent.
 
+use crate::audio;
 use crate::gfx::{Color, Gfx};
-use crate::input::{Action, Input};
+use crate::input::{Action, Input, Lights, PadKind};
 use crate::library::{self, Item, Launch};
+use crate::media::{self, NowPlaying};
 use crate::shell::{self, Shell, Window};
+use crate::spotify::{self, Music, Pick};
 use crate::sound::{self, Sound};
 use crate::social::{self, Req};
 use crate::store::Store;
@@ -25,6 +28,11 @@ pub(crate) const T3: Color = Color::hex(0x8a847a);
 pub(crate) const ACCENT: Color = Color::hex(0xf0a24b);
 pub(crate) const INK: Color = Color::hex(0x1f1408);
 pub(crate) const LINE: Color = Color(0.937, 0.914, 0.871, 0.08);
+/// Discord's own colour, for its tiles and the controller light on them.
+pub(crate) const DISCORD: Color = Color::hex(0x5865f2);
+
+/// Sleep timer lengths, in minutes: the quick menu steps through them, then off.
+const TIMER_STEPS: [u32; 4] = [30, 60, 90, 120];
 
 /// Messages background threads post to the window.
 pub const WM_LIBRARY: u32 = 0x8000 + 5; // the Start menu scan or icon extraction finished
@@ -112,6 +120,97 @@ pub(crate) struct Run {
     pub win: Window,
     pub item: Option<usize>,
     pub icon: Option<PathBuf>,
+    /// When its program started (epoch ms), for "Running · 1 h 12 min".
+    pub since: Option<f64>,
+}
+
+/// A control in the quick menu (the PS button on Home), by what it changes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Ctl {
+    /// What is playing: ✕ plays or pauses, L1 and R1 skip.
+    Music,
+    Output,
+    Volume,
+    Mic,
+    Timer,
+    Light,
+    Power,
+}
+
+impl Ctl {
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Ctl::Music => "music",
+            Ctl::Output => "output",
+            Ctl::Volume => "volume",
+            Ctl::Mic => "mic",
+            Ctl::Timer => "timer",
+            Ctl::Light => "light",
+            Ctl::Power => "power",
+        }
+    }
+}
+
+/// How a quick menu control looks: its icon, what it is, its state, and what ✕ does.
+pub(crate) struct CtlFace {
+    pub icon: &'static str,
+    pub label: &'static str,
+    /// The state ("Living room TV", "40%", "Muted"); empty for controls that only open.
+    pub value: String,
+    /// A state that is on (muted, a timer running): amber.
+    pub on: bool,
+    /// The volume level, drawn as a bar.
+    pub level: Option<f32>,
+    pub verb: &'static str,
+    /// What is playing: its art, and the app playing it.
+    pub art: Option<PathBuf>,
+    pub app: String,
+}
+
+/// Windows' sound devices as last read. A QA run starts with made-up ones and changes only
+/// those: it must not touch the real sound settings.
+#[derive(Clone, Default)]
+pub(crate) struct AudioState {
+    pub outputs: Vec<audio::Output>,
+    pub current: Option<String>,
+    pub volume: Option<f32>,
+    pub muted: bool,
+    pub mic: Option<bool>,
+}
+
+impl AudioState {
+    fn qa() -> AudioState {
+        let out = |id: &str, name: &str, kind| audio::Output { id: id.into(), name: name.into(), detail: String::new(), kind };
+        AudioState {
+            outputs: vec![out("qa-tv", "Living room TV", audio::Kind::Tv), out("qa-headphones", "Headphones", audio::Kind::Headphones)],
+            current: Some("qa-tv".into()),
+            volume: Some(0.4),
+            muted: false,
+            mic: Some(false),
+        }
+    }
+
+    pub(crate) fn output(&self) -> Option<&audio::Output> {
+        self.outputs.iter().find(|o| Some(&o.id) == self.current.as_ref())
+    }
+}
+
+pub(crate) fn kind_icon(k: audio::Kind) -> &'static str {
+    match k {
+        audio::Kind::Tv => "tv",
+        audio::Kind::Headphones => "headphones",
+        audio::Kind::Speakers => "speaker",
+        audio::Kind::Controller => "bigpicture",
+    }
+}
+
+/// "45 min", "1 h 30 min".
+pub(crate) fn duration_text(min: u32) -> String {
+    match (min / 60, min % 60) {
+        (0, m) => format!("{m} min"),
+        (h, 0) => format!("{h} h"),
+        (h, m) => format!("{h} h {m} min"),
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -122,7 +221,31 @@ pub(crate) enum Tile {
     Running(isize),
     /// Discord voice (Home's row and the Social tab).
     Social(Soc),
+    /// Spotify (Home's row and the Music tab).
+    Music(Mu),
 }
+
+/// A Spotify tile: something to play (by its URI), or the account and the way to connect.
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum Mu {
+    Play(String),
+    Account,
+    Setup,
+}
+
+impl Mu {
+    pub(crate) fn key(&self) -> String {
+        match self {
+            Mu::Play(uri) => uri.clone(),
+            Mu::Account => "account".into(),
+            Mu::Setup => "setup".into(),
+        }
+    }
+}
+
+/// Spotify's colours, for its tiles and the controller light on them.
+pub(crate) const SPOTIFY: Color = Color::hex(0x1ed760);
+pub(crate) const SPOTIFY_BG: Color = Color::hex(0x121212);
 
 /// A Discord tile, by what it does (channel, server and member ids are Discord's).
 #[derive(Clone, PartialEq, Debug)]
@@ -187,6 +310,8 @@ pub(crate) enum Key {
     R1,
     L2,
     R2,
+    /// The PS button (Guide on Xbox, Home on Nintendo).
+    Home,
 }
 
 #[derive(Clone)]
@@ -220,6 +345,25 @@ pub(crate) enum Act {
     DcForgetNow,
     DcJoin(String),
     DcLeave,
+    /// Make this sound output the default.
+    Output(String),
+    /// A System tile's action (`sys:<key>`), from the Power sheet.
+    System(&'static str),
+    /// Controller light: follows the game, amber, off.
+    Light,
+    /// The sleep timer's warning: cancel it, or sleep now.
+    StayAwake,
+    SleepNow,
+    /// Spotify: the setup steps, the account, and playing.
+    SpPage,
+    SpId,
+    SpConnect,
+    SpRedo,
+    SpRefresh,
+    SpForget,
+    SpForgetNow,
+    SpPlay(String, bool),
+    SpOpen(String),
 }
 
 #[derive(Clone)]
@@ -266,6 +410,14 @@ pub(crate) enum SheetKind {
     DcVoice,
     /// A server's voice channels (`App::dc_server`).
     DcServer,
+    /// Sound outputs, from the quick menu.
+    Sound,
+    /// Sleep, restart, shut down, from the quick menu.
+    Power,
+    /// Connect Spotify, its account, and a playlist's or album's options.
+    SpSetup,
+    SpAccount,
+    Music,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -274,6 +426,7 @@ pub(crate) enum KbPurpose {
     Rename(usize),
     DcId,
     DcSecret,
+    SpId,
 }
 
 /// The on-screen keyboard: 4 rows of 10 characters, then the bottom row.
@@ -305,6 +458,9 @@ pub(crate) enum Layer {
     Launch { item: usize, at: f64 },
     Keyboard(Keyboard),
     Welcome { opts: Vec<Opt>, focus: usize, at: f64 },
+    /// The quick menu: the PS button while Home is showing. Focus is kept by control, since
+    /// the controls shown can change while it is open (a controller disconnects).
+    Quick { focus: Ctl, at: f64 },
 }
 
 pub struct App {
@@ -356,14 +512,57 @@ pub struct App {
     pub(crate) dc: DcSetup,
     pub(crate) dc_server: Option<String>,
     dc_authorizing: bool,
+    pub(crate) audio: AudioState,
+    /// When L2 or R2 last changed the volume: the top bar shows the level for a moment.
+    pub(crate) vol_at: f64,
+    /// When the sleep timer ends (epoch ms, so time asleep counts).
+    pub(crate) sleep_at: Option<f64>,
+    /// The one-minute warning is up; it came over this window (resumed on Stay awake).
+    sleep_warned: bool,
+    sleep_from: Option<isize>,
+    /// Seconds left as last drawn (the top bar's minutes, the warning's countdown).
+    sleep_shown: i64,
+    /// The colour Sofa gives the DualSense's lightbar while it is in front.
+    light_rgb: (u8, u8, u8),
+    /// What is playing (the `media` thread updates it, WM_MEDIA).
+    pub(crate) media: media::Media,
+    pub(crate) playing: Option<NowPlaying>,
+    /// Spotify (the `spotify` thread updates it, WM_MUSIC), and the Client ID being set up.
+    pub(crate) spotify: spotify::Spotify,
+    pub(crate) music: Music,
+    pub(crate) sp_id: String,
+    /// Spotify changed while a menu was open: Home and Music rebuild when it closes.
+    music_stale: bool,
+    /// An Xbox (XInput) pad was connected this run: Game Bar's use of its button is offered.
+    pub(crate) xbox: bool,
 }
 
-const TABS: [(&str, &str); 6] = [("home", "Home"), ("games", "Games"), ("media", "Media"), ("apps", "Apps"), ("social", "Social"), ("system", "System")];
+const TABS: [(&str, &str); 7] = [("home", "Home"), ("games", "Games"), ("media", "Media"), ("music", "Music"), ("apps", "Apps"), ("social", "Social"), ("system", "System")];
+
+/// A QA run's made-up Spotify library (no covers: nothing is downloaded in QA).
+fn qa_music() -> Music {
+    let pick = |kind, uri: &str, name: &str, songs: u32, by: &str| Pick { kind, uri: uri.into(), name: name.into(), songs: Some(songs), by: by.into(), cover: None };
+    Music {
+        configured: true,
+        ready: true,
+        user: Some("Sofa QA".into()),
+        library: vec![
+            pick(spotify::Kind::Liked, "spotify:user:qa:collection", "Liked Songs", 512, ""),
+            pick(spotify::Kind::Playlist, "spotify:playlist:qa1", "Late Night Drive", 42, "Sofa QA"),
+            pick(spotify::Kind::Playlist, "spotify:playlist:qa2", "Couch Co-op", 18, "Sofa QA"),
+            pick(spotify::Kind::Playlist, "spotify:playlist:qa3", "Rainy Sunday", 30, "A friend"),
+            pick(spotify::Kind::Album, "spotify:album:qa4", "Random Access Memories", 13, "Daft Punk"),
+            pick(spotify::Kind::Album, "spotify:album:qa5", "Discovery", 14, "Daft Punk"),
+        ],
+        ..Music::default()
+    }
+}
 
 pub(crate) fn cat_label(c: &str) -> &'static str {
     match c {
         "games" => "Games",
         "media" => "Media",
+        "music" => "Music",
         "hidden" => "Hidden",
         "system" => "System",
         _ => "Apps",
@@ -383,6 +582,22 @@ impl App {
         let discord = store.map("social").get("discord").cloned().unwrap_or(Value::Null);
         let social = social::Social::start(data.clone(), cache.clone(), shell.sofa, discord, !qa);
         let voice = social.snapshot();
+        // What is playing: never read from (or controlled in) the real world in a QA run, which
+        // plays a made-up track instead.
+        let media = media::Media::start(cache.clone(), shell.sofa, !qa);
+        if qa {
+            media.set(Some(NowPlaying { title: "Night Drive".into(), artist: "The Late Show".into(), app: "Spotify".into(), playing: true, art: None }));
+        }
+        let playing = media.snapshot();
+        // Spotify: never in a QA run, which shows a made-up library instead.
+        let sp_cfg = store.map("music").get("spotify").cloned().unwrap_or(Value::Null);
+        let spotify = spotify::Spotify::start(data.clone(), cache.clone(), shell.sofa, sp_cfg, !qa);
+        if qa {
+            spotify.set(qa_music());
+        }
+        let music = spotify.snapshot();
+        // An Xbox pad connected at start: Game Bar's use of its button is offered.
+        let xbox = !qa && input.xbox_now();
         let mut app = App {
             gfx,
             input,
@@ -399,6 +614,20 @@ impl App {
             dc: DcSetup::default(),
             dc_server: None,
             dc_authorizing: false,
+            audio: if qa { AudioState::qa() } else { AudioState::default() },
+            vol_at: -1e9,
+            sleep_at: None,
+            sleep_warned: false,
+            sleep_from: None,
+            sleep_shown: -1,
+            light_rgb: (0, 0, 0),
+            media,
+            playing,
+            spotify,
+            music,
+            sp_id: String::new(),
+            music_stale: false,
+            xbox,
             tab: "home".into(),
             rows: Vec::new(),
             grid: false,
@@ -444,6 +673,10 @@ impl App {
     pub fn startup(&mut self, now: f64) {
         self.scan_in_background(now);
         self.social_refresh(now, 0.0);
+        if !self.qa {
+            // The mute LED shows the microphone from the start.
+            self.audio.mic = audio::mic_muted();
+        }
         if self.store.top_flag("setupDone") && self.store.flag("steamGuide") {
             self.steam_fix(false);
         }
@@ -508,6 +741,10 @@ impl App {
 
     pub(crate) fn tabs(&self) -> Vec<(&'static str, &'static str)> {
         let mut t = TABS.to_vec();
+        // Music is for people with Spotify (installed, or signed in).
+        if !self.music.configured && !self.items.iter().any(|i| i.source == "start" && i.name.eq_ignore_ascii_case("spotify")) {
+            t.retain(|(k, _)| *k != "music");
+        }
         if self.store.flag("showHidden") {
             t.push(("hidden", "Hidden"));
         }
@@ -529,9 +766,11 @@ impl App {
     pub(crate) fn rebuild(&mut self, keep: bool) {
         let keep_id = keep.then(|| self.focused_tile_id()).flatten();
         let mut rows = Vec::new();
-        self.grid = self.tab != "home" && self.tab != "social";
+        self.grid = !matches!(self.tab.as_str(), "home" | "social" | "music");
         if self.tab == "social" {
             rows = self.social_rows();
+        } else if self.tab == "music" {
+            rows = self.music_rows();
         } else if self.tab == "home" {
             let visible: Vec<usize> = (0..self.items.len()).filter(|&i| !matches!(self.items[i].category.as_str(), "hidden" | "system")).collect();
             let mut recent: Vec<usize> = visible.iter().copied().filter(|&i| self.items[i].last_played > 0.0).collect();
@@ -557,6 +796,16 @@ impl App {
                     tiles.push(Tile::Nav { cat: cat.into(), count: n });
                 }
                 push(cat, cat_label(cat), tiles, n);
+                if cat == "media" {
+                    // Spotify after Media: Liked Songs and the playlists, then the Music tab.
+                    let picks: Vec<&Pick> = self.music.library.iter().filter(|p| p.kind != spotify::Kind::Album).collect();
+                    let n = self.music.library.len();
+                    let mut tiles: Vec<Tile> = picks.iter().take(12).map(|p| Tile::Music(Mu::Play(p.uri.clone()))).collect();
+                    if n > tiles.len() {
+                        tiles.push(Tile::Nav { cat: "music".into(), count: n });
+                    }
+                    push("music", "Music", tiles, n);
+                }
             }
         } else {
             let list = self.sorted(&self.tab);
@@ -597,6 +846,7 @@ impl App {
             Tile::Nav { cat, .. } => format!("nav:{cat}"),
             Tile::Running(h) => format!("run:{h}"),
             Tile::Social(s) => format!("dc:{}", s.key()),
+            Tile::Music(m) => format!("mu:{}", m.key()),
         }
     }
 
@@ -698,10 +948,7 @@ impl App {
     pub fn action(&mut self, a: Action, now: f64) {
         self.dirty = true;
         if a == Action::Home {
-            if self.go_home(now) {
-                sound::play(Sound::Back);
-            }
-            return;
+            return self.home_action(now);
         }
         if let Some(Layer::Launch { .. }) = self.layers.last() {
             if a == Action::Back {
@@ -714,7 +961,10 @@ impl App {
             return self.kb_action(a, now);
         }
         if matches!(a, Action::VolUp | Action::VolDown) {
-            return volume(a == Action::VolUp);
+            return self.volume_step(a == Action::VolUp, now);
+        }
+        if matches!(self.layers.last(), Some(Layer::Quick { .. })) {
+            return self.quick_action(a, now);
         }
         if !self.layers.is_empty() {
             return self.layer_action(a, now);
@@ -731,11 +981,35 @@ impl App {
                 if self.tab != "home" {
                     sound::play(Sound::Back);
                     self.set_tab("home", now);
+                } else if self.focus != (0, 0) && !self.rows.is_empty() {
+                    // Deep in Home, Back returns to the first tile.
+                    let before = self.focus;
+                    self.focus = (0, 0);
+                    sound::play(Sound::Back);
+                    self.focus_changed(before, now);
                 } else {
                     sound::play(Sound::Edge);
                 }
             }
             Action::Home | Action::VolUp | Action::VolDown => {}
+        }
+    }
+
+    /// The PS button while Sofa is in front: anywhere else it goes Home; on Home it opens the
+    /// quick menu, and closes it again.
+    fn home_action(&mut self, now: f64) {
+        if matches!(self.layers.last(), Some(Layer::Quick { .. })) {
+            self.layers.pop();
+            sound::play(Sound::Back);
+            return;
+        }
+        if self.tab == "home" && self.layers.is_empty() {
+            // Home is current under the menu: apps that closed lose their cards.
+            self.prune_running();
+            return self.quick_menu(now);
+        }
+        if self.go_home(now) {
+            sound::play(Sound::Back);
         }
     }
 
@@ -882,6 +1156,8 @@ impl App {
         if strict && item.is_none() {
             return false;
         }
+        // The same window keeps the time it was first seen running.
+        let since = self.running.iter().find(|r| r.win.hwnd == w.hwnd).and_then(|r| r.since).or_else(|| shell::started(w.hwnd));
         self.running.retain(|r| r.win.hwnd != w.hwnd && (item.is_none() || r.item != item));
         let icon = (item.is_none() && !w.exe.is_empty()).then(|| library::icon_cache(&self.cache, std::path::Path::new(&w.exe)));
         if let Some(png) = &icon
@@ -890,7 +1166,7 @@ impl App {
         {
             spawn_scan(&self.cache, &[(w.exe.clone(), png.clone())], false, self.shell.sofa, WM_ICON);
         }
-        self.running.insert(0, Run { win: w, item, icon });
+        self.running.insert(0, Run { win: w, item, icon, since });
         self.running.truncate(6);
         true
     }
@@ -920,6 +1196,7 @@ impl App {
             Some(Tile::Item(i)) => self.open_item(i, now),
             Some(Tile::Running(h)) => self.resume(h),
             Some(Tile::Social(s)) => self.social_action(s, now),
+            Some(Tile::Music(m)) => self.music_action(m),
             None => {}
         }
     }
@@ -942,6 +1219,19 @@ impl App {
         }
         // Like a console: picking something that is already running resumes it.
         if let Some(h) = self.running.iter().find(|r| r.item == Some(i)).map(|r| r.win.hwnd) {
+            return self.resume(h);
+        }
+        // Open without a card (started before Sofa, or from the desktop): switch to its window
+        // instead of starting a second copy. Some apps answer a second start badly (Spotify asks
+        // to force-close itself when its first copy is slow to reply).
+        if !self.qa
+            && let Launch::AppsFolder(id) = &it.launch
+            && let Some(name) = std::path::Path::new(id).file_name().map(|n| n.to_string_lossy().to_lowercase()).filter(|n| n.ends_with(".exe"))
+            && let Some(h) = shell::find_window(&name)
+        {
+            if self.add_running(shell::window(h), false) && !self.layers_hold_items() {
+                self.rebuild(true);
+            }
             return self.resume(h);
         }
         // One game at a time, unless the person wants both.
@@ -1094,6 +1384,16 @@ impl App {
                 sound::play(Sound::Open);
                 self.layers.push(Layer::Sheet { title, sub, opts, focus: 0, kind: SheetKind::Item });
             }
+            Some(Tile::Music(Mu::Play(uri))) => {
+                let Some(p) = self.pick(&uri).cloned() else { return };
+                let opts = vec![
+                    Opt::new("Play", Act::SpPlay(uri.clone(), false)).icon("play"),
+                    Opt::new("Shuffle play", Act::SpPlay(uri.clone(), true)).icon("rescan"),
+                    Opt::new("Open in Spotify", Act::SpOpen(uri)).icon("app"),
+                ];
+                sound::play(Sound::Open);
+                self.layers.push(Layer::Sheet { title: p.name.clone(), sub: pick_meta(&p, self.music.user.as_deref()), opts, focus: 0, kind: SheetKind::Music });
+            }
             _ => sound::play(Sound::Edge),
         }
     }
@@ -1107,23 +1407,58 @@ impl App {
         }
     }
 
+    /// The controller's Home button by name: the PS button, or the Xbox button on an Xbox pad.
+    pub(crate) fn guide_name(&self) -> &'static str {
+        if self.input.kind == PadKind::Xbox { "Xbox button" } else { "PS button" }
+    }
+
+    /// The Home button as set: the guide button, or the two buttons pressed together.
+    pub(crate) fn home_name(&self) -> &'static str {
+        match (self.store.text("homeButton") == "combo", self.input.kind == PadKind::Xbox) {
+            (true, true) => "View + Menu",
+            (true, false) => "Create + Options",
+            (false, true) => "Xbox button",
+            (false, false) => "PS button",
+        }
+    }
+
+    /// "Press the PS button", "Press View + Menu".
+    pub(crate) fn home_press(&self) -> String {
+        if self.store.text("homeButton") == "combo" { format!("Press {}", self.home_name()) } else { format!("Press the {}", self.home_name()) }
+    }
+
+    /// The DualSense's lightbar setting (`controllerLight`, as in 1.x).
+    pub(crate) fn light_name(&self) -> &'static str {
+        match self.store.text("controllerLight") {
+            "amber" => "Amber",
+            "off" => "Off",
+            _ => "Game's colour",
+        }
+    }
+
     fn settings_opts(&self) -> Vec<Opt> {
         let browser = platform::chosen_browser(self.store.text("browser")).map_or("None found", |b| b.name);
         let autostart = if self.qa { self.store.flag("launchAtLogin") } else { install::autostart() };
-        vec![
+        let mut opts = vec![
             Opt::new("Start Sofa with Windows", Act::Toggle("launchAtLogin")).switch(autostart),
             Opt::new("Keep Sofa in front", Act::Toggle("keepInFront")).switch(self.store.flag("keepInFront")),
-            Opt::new("Home button", Act::HomeButton).value(if self.store.text("homeButton") == "combo" { "Create + Options" } else { "PS button" }),
+            Opt::new("Home button", Act::HomeButton).value(self.home_name()),
             Opt::new("Button layout", Act::Layout).value(self.layout_name()),
-            Opt::new("Keep Steam off the PS button", Act::Toggle("steamGuide")).switch(self.store.flag("steamGuide")),
+            Opt::new("Controller light", Act::Light).value(self.light_name()),
+            Opt::new(format!("Keep Steam off the {}", self.guide_name()), Act::Toggle("steamGuide")).switch(self.store.flag("steamGuide")),
             Opt::new("Browser", Act::Browser).value(browser),
             Opt::new("Interface sounds", Act::Toggle("sounds")).switch(self.store.flag("sounds")),
             Opt::new("Reduce motion", Act::Toggle("motion")).switch(self.store.text("motion") == "reduced"),
             Opt::new("Show hidden apps", Act::Toggle("showHidden")).switch(self.store.flag("showHidden")),
             Opt::new("Rescan library", Act::Rescan).icon("rescan"),
-            Opt::new("Go to desktop", Act::Desktop).icon("desktop").value("PS button returns"),
+            Opt::new("Go to desktop", Act::Desktop).icon("desktop").value(format!("{} returns", self.home_name())),
             Opt::new("Quit Sofa", Act::Quit).icon("quit"),
-        ]
+        ];
+        // An Xbox pad: Game Bar also wants its button (Windows' setting, shown as it is now).
+        if self.xbox && !self.qa {
+            opts.insert(6, Opt::new("Keep Game Bar off the Xbox button", Act::Toggle("gameBarOff")).switch(!install::game_bar_button()));
+        }
+        opts
     }
 
     fn settings(&mut self) {
@@ -1142,23 +1477,34 @@ impl App {
     }
 
     fn welcome_opts(&self) -> Vec<Opt> {
-        vec![
+        let mut opts = vec![
             Opt::new("Start Sofa with Windows", Act::Toggle("launchAtLogin")).switch(self.store.flag("launchAtLogin")),
-            Opt::new("Keep Steam off the PS button", Act::Toggle("steamGuide")).switch(self.store.flag("steamGuide")),
-            Opt::new("Button layout", Act::Layout).value(self.layout_name()),
-            Opt::new("Continue", Act::WelcomeDone).icon("check"),
-        ]
+            Opt::new(format!("Keep Steam off the {}", self.guide_name()), Act::Toggle("steamGuide")).switch(self.store.flag("steamGuide")),
+        ];
+        if self.xbox && !self.qa {
+            opts.push(Opt::new("Keep Game Bar off the Xbox button", Act::Toggle("gameBarOff")).switch(self.store.flag("gameBarOff")));
+        }
+        opts.push(Opt::new("Button layout", Act::Layout).value(self.layout_name()));
+        opts.push(Opt::new("Continue", Act::WelcomeDone).icon("check"));
+        opts
     }
 
     fn welcome(&mut self, now: f64) {
         let opts = self.welcome_opts();
-        self.layers.push(Layer::Welcome { opts, focus: 3, at: now });
+        let focus = opts.len() - 1;
+        self.layers.push(Layer::Welcome { opts, focus, at: now });
     }
 
+    /// The first-run screen follows its settings, focus kept on the same choice.
     fn refresh_welcome(&mut self) {
         let fresh = self.welcome_opts();
-        if let Some(Layer::Welcome { opts, .. }) = self.layers.iter_mut().find(|l| matches!(l, Layer::Welcome { .. })) {
+        if let Some(Layer::Welcome { opts, focus, .. }) = self.layers.iter_mut().find(|l| matches!(l, Layer::Welcome { .. })) {
+            let act = opts.get(*focus).map(|o| std::mem::discriminant(&o.act));
             *opts = fresh;
+            if let Some(i) = act.and_then(|d| opts.iter().position(|o| std::mem::discriminant(&o.act) == d)) {
+                *focus = i;
+            }
+            *focus = (*focus).min(opts.len() - 1);
         }
     }
 
@@ -1244,6 +1590,10 @@ impl App {
     pub fn kb_done(&mut self) {
         let Some(Layer::Keyboard(kb)) = self.layers.pop() else { return };
         match kb.purpose {
+            KbPurpose::SpId => {
+                self.sp_id = kb.text.trim().to_owned();
+                self.refresh_sp_setup(3);
+            }
             KbPurpose::DcId => {
                 self.dc.client_id = kb.text.trim().to_owned();
                 self.focus_setup(3);
@@ -1406,6 +1756,11 @@ impl App {
             _ => None,
         };
         let welcome = matches!(self.layers.last(), Some(Layer::Welcome { .. }));
+        if a == Action::Back && self.layers.last().is_some_and(is_sleep_warning) {
+            // Backing out of the warning keeps the PC awake rather than letting it sleep.
+            sound::play(Sound::Back);
+            return self.run(Act::StayAwake, now);
+        }
         let Some(top) = self.layers.last_mut() else { return };
         let (opts, focus) = match top {
             Layer::Sheet { opts, focus, .. } | Layer::Dialog { opts, focus, .. } | Layer::Welcome { opts, focus, .. } => (opts.clone(), focus),
@@ -1480,6 +1835,14 @@ impl App {
                 self.store.set(key, Value::Bool(on));
                 if on && !self.qa && self.store.top_flag("setupDone") {
                     self.steam_fix(false);
+                }
+            }
+            "gameBarOff" => {
+                // After setup it changes Windows' setting at once, from what it is now.
+                let off = if self.qa || !self.store.top_flag("setupDone") { !self.store.flag(key) } else { install::game_bar_button() };
+                self.store.set(key, Value::Bool(off));
+                if !self.qa && self.store.top_flag("setupDone") {
+                    install::set_game_bar_button(!off);
                 }
             }
             _ => {
@@ -1577,6 +1940,41 @@ impl App {
                 self.refresh_settings();
                 self.refresh_welcome();
             }
+            Act::Light => self.cycle_light(),
+            sp @ (Act::SpPage | Act::SpId | Act::SpConnect | Act::SpRedo | Act::SpRefresh | Act::SpForget | Act::SpForgetNow | Act::SpPlay(..) | Act::SpOpen(_)) => self.sp_run(sp, now),
+            Act::Output(id) => {
+                let ok = self.qa || audio::set_output(&id);
+                self.layers.retain(|l| !matches!(l, Layer::Sheet { kind: SheetKind::Sound, .. }));
+                if ok {
+                    self.audio.current = Some(id);
+                    self.audio_refresh();
+                } else {
+                    self.toast("Couldn't switch the sound", "Windows didn't accept that output. Try it in Windows' sound settings.");
+                }
+            }
+            Act::System(key) => {
+                let Some(it) = self.items.iter().find(|i| i.id == format!("sys:{key}")).cloned() else { return };
+                if let Launch::System { action, uri } = &it.launch {
+                    if key == "sleep" {
+                        // Wake up to Home, not to an open menu.
+                        self.layers.retain(|l| matches!(l, Layer::Welcome { .. }));
+                    }
+                    self.system(&it, action.clone(), uri.clone(), now);
+                }
+            }
+            Act::StayAwake => {
+                self.layers.retain(|l| !is_sleep_warning(l));
+                self.sleep_at = None;
+                self.sleep_warned = false;
+                self.toast("Sleep timer off", "The PC stays on.");
+                if let Some(h) = self.sleep_from.take() {
+                    self.resume(h);
+                }
+            }
+            Act::SleepNow => {
+                self.sleep_at = Some(epoch_ms());
+                self.sleep_tick(now);
+            }
             Act::Browser => {
                 let all = platform::browsers();
                 if all.len() > 1 {
@@ -1615,8 +2013,12 @@ impl App {
                     if self.store.flag("steamGuide") {
                         self.steam_fix(false);
                     }
+                    if self.xbox && self.store.flag("gameBarOff") {
+                        install::set_game_bar_button(false);
+                    }
                 }
-                self.toast("Sofa is ready", "Press the PS button in any game to come back here.");
+                let body = format!("{} in any game to come back here, and on Home for the quick menu.", self.home_press());
+                self.toast("Sofa is ready", &body);
             }
             Act::Close => {
                 self.layers.pop();
@@ -1656,8 +2058,8 @@ impl App {
     pub fn steam_result(&mut self, code: usize) {
         crate::log(&format!("steam fix result {code}"));
         match code {
-            1 => self.toast("Steam no longer takes the PS button", "Steam restarted in the background."),
-            2 => self.toast("Steam no longer takes the PS button", "Sofa turned off \"Guide button focuses Steam\"."),
+            1 => self.toast(&format!("Steam no longer takes the {}", self.guide_name()), "Steam restarted in the background."),
+            2 => self.toast(&format!("Steam no longer takes the {}", self.guide_name()), "Sofa turned off \"Guide button focuses Steam\"."),
             5 => self.toast("Steam didn't close", "Close Steam yourself, then try again from Settings."),
             6 => self.toast("Couldn't change Steam's setting", "You can turn it off in Steam, Settings, Controller."),
             _ => {}
@@ -1677,7 +2079,7 @@ impl App {
         }
         sound::play(Sound::Open);
         self.layers.push(Layer::Dialog {
-            title: "Steam is also using the PS button".into(),
+            title: format!("Steam is also using the {}", self.guide_name()),
             body: "Sofa can turn off Steam's \"Guide button focuses Steam\". Steam closes and starts again in the background, so finish any Steam game first.".into(),
             opts: vec![Opt::new("Fix it now", Act::SteamFixNow).icon("check"), Opt::new("Not now", Act::Close).icon("close")],
             focus: 0,
@@ -1702,6 +2104,10 @@ impl App {
         if focused {
             self.unfocused_at = None;
             self.trimmed = false;
+            if !self.qa {
+                // The microphone may have been muted elsewhere: the LED and the quick menu follow.
+                self.audio.mic = audio::mic_muted();
+            }
             // Back from an app without the PS button (it closed, or Alt+Tab): it gets a card
             // when it is a library app or a full-screen one.
             if let Some((w, full)) = self.shell.take_last_app()
@@ -1751,6 +2157,11 @@ impl App {
         let low = info.connected && info.battery.is_some_and(|b| b <= 15) && !info.charging;
         let (was_ds, was_x, was_low) = self.pads;
         self.pads = (info.connected, x, low);
+        // An Xbox pad (after the first poll XInput is asked, not assumed): Settings offers to
+        // keep Game Bar off its button.
+        if x && !self.qa && !self.xbox {
+            self.xbox = self.input.xbox_now();
+        }
         if self.qa || now - self.boot_at < 4000.0 {
             return;
         }
@@ -1800,6 +2211,12 @@ impl App {
         if self.pending_rescan && !self.layers_hold_items() {
             self.rescan();
         }
+        if self.music_stale && !self.layers_hold_items() {
+            self.music_stale = false;
+            if self.tab == "home" || self.tab == "music" {
+                self.rebuild(true);
+            }
+        }
         if let Some((_, _, at)) = &mut self.toast {
             if *at < 0.0 {
                 *at = now;
@@ -1815,12 +2232,17 @@ impl App {
             self.dirty = true;
         }
         self.watch_pads(now);
+        self.sleep_tick(now);
+        self.lights_tick(now);
         let m = self.motion() > 0.0;
         let hero_moving = m && self.hero.as_ref().is_some_and(|(_, t)| now - t < 1250.0);
         let welcome = self.layers.iter().any(|l| matches!(l, Layer::Welcome { at, .. } if now - at < 900.0));
+        let quick = self.layers.iter().any(|l| matches!(l, Layer::Quick { at, .. } if now - at < 420.0));
         self.dirty
             || now - self.boot_at < 1000.0
             || welcome
+            || quick
+            || now - self.vol_at < 1800.0
             || hero_moving
             || self.hero_pending.is_some()
             || self.scroll_y.busy(now)
@@ -1841,9 +2263,10 @@ impl App {
             Some(Layer::Launch { item, .. }) => format!("launch:{}", self.items[*item].id),
             Some(Layer::Keyboard(kb)) => format!("keyboard:{:?}:{}:{}:{}", kb.purpose, kb.text, kb.hits.len(), kb.result.map_or(-1, |r| r as i64)),
             Some(Layer::Welcome { focus, .. }) => format!("welcome:{focus}"),
+            Some(Layer::Quick { focus, .. }) => format!("quick:{}", focus.key()),
         };
         format!(
-            "state|tab={}|focus={},{}|tile={}|layer={}|rows={}|items={}|running={}|toast={}",
+            "state|tab={}|focus={},{}|tile={}|layer={}|rows={}|items={}|running={}|toast={}|sleep={}|volume={}|output={}|mic={}|music={}|rowkeys={}",
             self.tab,
             self.focus.0,
             self.focus.1,
@@ -1852,7 +2275,13 @@ impl App {
             self.rows.len(),
             self.items.len(),
             self.running.len(),
-            self.toast.as_ref().map_or("", |t| t.0.as_str())
+            self.toast.as_ref().map_or("", |t| t.0.as_str()),
+            self.sleep_left().map_or("off".to_owned(), |ms| format!("{:.0}", (ms / 60_000.0).ceil())),
+            self.audio.volume.map_or("-".to_owned(), |v| format!("{:.0}", v * 100.0)),
+            self.audio.current.as_deref().unwrap_or("-"),
+            if self.mic_muted() { "muted" } else { "on" },
+            self.playing.as_ref().map_or("-", |p| if p.playing { "playing" } else { "paused" }),
+            self.rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>().join(",")
         )
     }
 
@@ -2291,6 +2720,666 @@ impl App {
             *focus = step;
         }
     }
+}
+
+/// The quick menu, sound, the microphone, the controller's lights and the sleep timer.
+impl App {
+    /// The quick menu's controls, left to right. Each shows only when it can work.
+    pub(crate) fn quick_ctls(&self) -> Vec<Ctl> {
+        let mut v = Vec::new();
+        if self.playing.is_some() {
+            v.push(Ctl::Music);
+        }
+        if self.audio.output().is_some() {
+            v.push(Ctl::Output);
+        }
+        if self.audio.volume.is_some() {
+            v.push(Ctl::Volume);
+        }
+        if self.audio.mic.is_some() || self.in_voice() {
+            v.push(Ctl::Mic);
+        }
+        v.push(Ctl::Timer);
+        // The light needs a DualSense (a QA run shows it whatever is plugged in).
+        if self.qa || self.input.info().connected {
+            v.push(Ctl::Light);
+        }
+        v.push(Ctl::Power);
+        v
+    }
+
+    pub(crate) fn ctl_face(&self, c: Ctl) -> CtlFace {
+        let face = |icon, label, value: String, on, verb| CtlFace { icon, label, value, on, level: None, verb, art: None, app: String::new() };
+        match c {
+            Ctl::Music => {
+                let np = self.playing.clone().unwrap_or_default();
+                let label = if np.playing { "Now playing" } else { "Paused" };
+                CtlFace { icon: "music", label, value: np.title, on: false, level: None, verb: if np.playing { "Pause" } else { "Play" }, art: np.art, app: if np.artist.is_empty() { np.app } else { np.artist } }
+            }
+            Ctl::Output => match self.audio.output() {
+                Some(o) => face(kind_icon(o.kind), "Sound output", o.name.clone(), false, "Choose"),
+                None => face("sound", "Sound output", "None".into(), false, "Choose"),
+            },
+            Ctl::Volume => {
+                let (v, m) = (self.audio.volume.unwrap_or(0.0), self.audio.muted);
+                let value = if m { "Muted".to_owned() } else { format!("{}%", (v * 100.0).round()) };
+                CtlFace { level: Some(if m { 0.0 } else { v }), ..face(if m { "volumeX" } else { "sound" }, "Volume", value, m, if m { "Unmute" } else { "Mute" }) }
+            }
+            Ctl::Mic => {
+                let m = self.mic_muted();
+                let label = if self.in_voice() { "Discord microphone" } else { "Microphone" };
+                face(if m { "micOff" } else { "mic" }, label, if m { "Muted" } else { "On" }.into(), m, if m { "Unmute" } else { "Mute" })
+            }
+            Ctl::Timer => match self.sleep_left() {
+                Some(ms) => face("timer", "Sleep timer", duration_text((ms / 60_000.0).ceil() as u32), true, "Change"),
+                None => face("timer", "Sleep timer", "Off".into(), false, "Start"),
+            },
+            Ctl::Light => face("lightbulb", "Controller light", self.light_name().into(), false, "Change"),
+            Ctl::Power => face("shutdown", "Power", String::new(), false, "Open"),
+        }
+    }
+
+    fn quick_menu(&mut self, now: f64) {
+        self.audio_refresh();
+        let focus = self.quick_ctls()[0];
+        sound::play(Sound::Open);
+        self.layers.push(Layer::Quick { focus, at: now });
+    }
+
+    fn quick_action(&mut self, a: Action, now: f64) {
+        let ctls = self.quick_ctls();
+        let Some(Layer::Quick { focus, .. }) = self.layers.last_mut() else { return };
+        let i = ctls.iter().position(|c| c == focus).unwrap_or(0);
+        match a {
+            Action::Left | Action::Right => {
+                let j = if a == Action::Left { i.checked_sub(1) } else { Some(i + 1).filter(|&j| j < ctls.len()) };
+                match j {
+                    Some(j) => {
+                        *focus = ctls[j];
+                        sound::play(Sound::Move);
+                    }
+                    None => sound::play(Sound::Edge),
+                }
+            }
+            Action::Back => {
+                self.layers.pop();
+                sound::play(Sound::Back);
+            }
+            Action::Accept => {
+                let c = ctls[i];
+                *focus = c;
+                sound::play(Sound::Select);
+                self.quick_run(c, now);
+            }
+            Action::TabPrev | Action::TabNext if ctls[i] == Ctl::Music => {
+                // L1 and R1 skip back and forward.
+                sound::play(Sound::Move);
+                self.media.send(if a == Action::TabPrev { media::Cmd::Previous } else { media::Cmd::Next });
+            }
+            Action::Options => self.settings(),
+            _ => sound::play(Sound::Edge),
+        }
+    }
+
+    /// WM_MEDIA: what is playing changed.
+    pub fn media_changed(&mut self) {
+        let now = self.media.snapshot();
+        if now != self.playing {
+            self.playing = now;
+            self.dirty = true;
+        }
+    }
+
+    fn quick_run(&mut self, c: Ctl, now: f64) {
+        match c {
+            Ctl::Music => {
+                self.media.send(media::Cmd::Toggle);
+                // Shown at once; the player's own answer follows (WM_MEDIA).
+                if let Some(p) = &mut self.playing {
+                    p.playing = !p.playing;
+                }
+                if self.qa {
+                    self.media.set(self.playing.clone());
+                }
+            }
+            Ctl::Output => self.output_sheet(),
+            Ctl::Volume => {
+                let m = !self.audio.muted;
+                if self.qa || audio::set_muted(m) {
+                    self.audio.muted = m;
+                }
+            }
+            Ctl::Mic => {
+                self.toggle_mic();
+                self.lights_tick(now);
+            }
+            Ctl::Timer => self.cycle_timer(),
+            Ctl::Light => self.cycle_light(),
+            Ctl::Power => self.power_sheet(),
+        }
+        self.dirty = true;
+    }
+
+    fn output_sheet(&mut self) {
+        self.audio_refresh();
+        let current = self.audio.current.clone();
+        let mut opts: Vec<Opt> = self
+            .audio
+            .outputs
+            .iter()
+            .map(|o| {
+                let opt = Opt::new(o.name.clone(), Act::Output(o.id.clone())).icon(kind_icon(o.kind));
+                if Some(&o.id) == current.as_ref() { opt.value("In use") } else { opt }
+            })
+            .collect();
+        let focus = self.audio.outputs.iter().position(|o| Some(&o.id) == current.as_ref()).unwrap_or(0);
+        opts.push(Opt::new("Windows sound settings", Act::System("sound")).icon("settings"));
+        sound::play(Sound::Open);
+        self.layers.push(Layer::Sheet { title: "Sound output".into(), sub: "Games, videos and Sofa play here.".into(), opts, focus, kind: SheetKind::Sound });
+    }
+
+    fn power_sheet(&mut self) {
+        let opts = vec![
+            Opt::new("Sleep", Act::System("sleep")).icon("sleep"),
+            Opt::new("Restart", Act::System("restart")).icon("restart"),
+            Opt::new("Shut down", Act::System("shutdown")).icon("shutdown"),
+            Opt::new("Go to desktop", Act::System("desktop")).icon("desktop").value(format!("{} returns", self.home_name())),
+            Opt::new("Quit Sofa", Act::System("quit")).icon("quit"),
+        ];
+        sound::play(Sound::Open);
+        self.layers.push(Layer::Sheet { title: "Power".into(), sub: "Games stay where they are while the PC sleeps.".into(), opts, focus: 0, kind: SheetKind::Power });
+    }
+
+    /// Reads the sound devices again (a QA run keeps its made-up ones).
+    fn audio_refresh(&mut self) {
+        if self.qa {
+            return;
+        }
+        let (outputs, current) = audio::outputs();
+        self.audio.outputs = outputs;
+        self.audio.current = current;
+        match audio::volume() {
+            Some((v, m)) => {
+                self.audio.volume = Some(v);
+                self.audio.muted = m;
+            }
+            None => self.audio.volume = None,
+        }
+        self.audio.mic = audio::mic_muted();
+    }
+
+    /// L2 and R2: the volume in 4 % steps, shown in the top bar or on the quick menu.
+    fn volume_step(&mut self, up: bool, now: f64) {
+        if !self.qa {
+            match audio::volume() {
+                Some((v, m)) => {
+                    self.audio.volume = Some(v);
+                    self.audio.muted = m;
+                }
+                // No volume to read: Windows' own volume keys.
+                None => return volume(up),
+            }
+        }
+        let Some(v) = self.audio.volume else { return };
+        let next = (((v * 25.0).round() + if up { 1.0 } else { -1.0 }) / 25.0).clamp(0.0, 1.0);
+        if self.qa || audio::set_volume(next) {
+            self.audio.volume = Some(next);
+            self.audio.muted = false;
+        }
+        self.vol_at = now;
+        sound::play(if (next - v).abs() < 0.001 { Sound::Edge } else { Sound::Move });
+    }
+
+    /// In a Discord voice channel: Sofa's mute then mutes you there, so the others see it.
+    fn in_voice(&self) -> bool {
+        self.voice.ready && self.voice.current.is_some()
+    }
+
+    /// Whether the microphone is muted: in Discord while in voice, else Windows' default one.
+    pub(crate) fn mic_muted(&self) -> bool {
+        if self.in_voice() { self.voice.mute } else { self.audio.mic.unwrap_or(false) }
+    }
+
+    /// Mutes or unmutes the microphone; the new state, or None without one.
+    fn toggle_mic(&mut self) -> Option<bool> {
+        if self.in_voice() {
+            self.voice.mute = !self.voice.mute;
+            self.social.send(Req::SetVoice { mute: Some(self.voice.mute), deaf: None });
+            if (self.tab == "home" || self.tab == "social") && !self.layers_hold_items() {
+                self.rebuild(true);
+            }
+            return Some(self.voice.mute);
+        }
+        if !self.qa {
+            self.audio.mic = audio::mic_muted();
+        }
+        let m = !self.audio.mic?;
+        if self.qa || audio::set_mic_muted(m) {
+            self.audio.mic = Some(m);
+        }
+        self.audio.mic
+    }
+
+    /// The DualSense's mute button, from any app, like on a PS5. Its LED shows the result.
+    pub fn mute_button(&mut self, now: f64) {
+        let discord = self.in_voice();
+        let Some(m) = self.toggle_mic() else { return };
+        if self.focused {
+            let title = match (discord, m) {
+                (true, true) => "Muted in Discord",
+                (true, false) => "Unmuted in Discord",
+                (false, true) => "Microphone muted",
+                (false, false) => "Microphone on",
+            };
+            self.toast(title, "");
+        }
+        self.lights_tick(now);
+        self.dirty = true;
+    }
+
+    fn cycle_light(&mut self) {
+        let next = match self.store.text("controllerLight") {
+            "amber" => "off",
+            "off" => "follow",
+            _ => "amber",
+        };
+        self.store.set("controllerLight", Value::from(next));
+        self.store.flush();
+        self.refresh_settings();
+        self.light_rgb = self.light_color();
+    }
+
+    /// The lightbar's colour: the focused game's (dimmed, so the light stays calm), amber or off.
+    fn light_color(&self) -> (u8, u8, u8) {
+        let dim = |c: Color| {
+            let (r, g, b) = c.rgb8();
+            let d = |v: u8| (f32::from(v) * 0.7) as u8;
+            (d(r), d(g), d(b))
+        };
+        match self.store.text("controllerLight") {
+            "off" => (0, 0, 0),
+            "amber" => dim(ACCENT),
+            _ => dim(self.focused_tone().unwrap_or(ACCENT)),
+        }
+    }
+
+    /// The focused tile's colour: its service's or Discord's, else its art's most vivid one.
+    pub(crate) fn focused_tone(&self) -> Option<Color> {
+        let (id, _) = self.hero.as_ref()?;
+        if id.starts_with("dc:") {
+            return Some(DISCORD);
+        }
+        if let Some(key) = id.strip_prefix("mu:") {
+            return Some(self.pick(key).and_then(|p| p.cover.as_ref()).and_then(|c| self.gfx.tone(c)).unwrap_or(SPOTIFY));
+        }
+        let i = match id.strip_prefix("run:").and_then(|h| h.parse::<isize>().ok()) {
+            Some(h) => self.run_of(h)?.item?,
+            None => self.items.iter().position(|it| &it.id == id)?,
+        };
+        let it = self.items.get(i)?;
+        it.color.as_deref().and_then(Color::parse).or_else(|| [&it.art.capsule, &it.art.hero, &it.art.icon].into_iter().flatten().find_map(|p| self.gfx.tone(p)))
+    }
+
+    /// Tells the DualSense thread what to show. The lightbar takes the focused tile's colour
+    /// once focus has rested 0.7 s, so moving along a row sends nothing.
+    fn lights_tick(&mut self, now: f64) {
+        if self.qa {
+            return;
+        }
+        let front = self.focused;
+        if front && self.hero_pending.is_none() && self.hero.as_ref().is_none_or(|(_, t)| now - t >= 700.0) {
+            self.light_rgb = self.light_color();
+        }
+        self.input.set_lights(Lights { armed: true, front, rgb: self.light_rgb, mute: self.mic_muted() });
+    }
+
+    /// Time left on the sleep timer (ms).
+    pub(crate) fn sleep_left(&self) -> Option<f64> {
+        self.sleep_at.map(|at| (at - epoch_ms()).max(0.0))
+    }
+
+    /// The quick menu's Sleep timer: 30 min, 1 h, 1 h 30 min, 2 h, then off.
+    fn cycle_timer(&mut self) {
+        let left = self.sleep_left().map(|ms| (ms / 60_000.0).ceil() as u32);
+        let next = match left {
+            None => Some(TIMER_STEPS[0]),
+            Some(m) => TIMER_STEPS.iter().copied().find(|&s| s > m),
+        };
+        self.sleep_at = next.map(|m| epoch_ms() + f64::from(m) * 60_000.0);
+        self.sleep_warned = false;
+        self.sleep_shown = -1;
+    }
+
+    /// The sleep timer: a minute before the end Sofa comes forward with a countdown; at the
+    /// end the PC sleeps (never in a QA run).
+    pub(crate) fn sleep_tick(&mut self, now: f64) {
+        let Some(at) = self.sleep_at else { return };
+        let left = at - epoch_ms();
+        if left <= 0.0 {
+            self.sleep_at = None;
+            self.sleep_warned = false;
+            self.sleep_from = None;
+            self.layers.retain(|l| !is_sleep_warning(l));
+            self.dirty = true;
+            // Long past the end, the PC was already asleep or off: the timer's job is done.
+            if left > -120_000.0 {
+                crate::log("sleep timer ended");
+                if !self.qa {
+                    platform::sleep();
+                }
+            }
+            return;
+        }
+        if left <= 60_000.0 && !self.sleep_warned {
+            self.sleep_warned = true;
+            self.sleep_warning(now);
+        }
+        let secs = (left / 1000.0).ceil() as i64;
+        let shown = if self.sleep_warned { secs } else { (secs + 59) / 60 };
+        if shown != self.sleep_shown {
+            self.sleep_shown = shown;
+            if self.sleep_warned {
+                let title = if secs == 1 { "Sleeping in 1 second".to_owned() } else { format!("Sleeping in {secs} seconds") };
+                for l in &mut self.layers {
+                    if is_sleep_warning(l)
+                        && let Layer::Dialog { title: t, .. } = l
+                    {
+                        *t = title.clone();
+                    }
+                }
+            }
+            self.dirty = true;
+        }
+    }
+
+    fn sleep_warning(&mut self, now: f64) {
+        self.sleep_from = None;
+        if !self.qa && !self.focused {
+            // Over a game or a film: Sofa comes forward, and Stay awake goes back to it.
+            let came = self.shell.home_pressed(now);
+            self.sleep_from = came.as_ref().map(|w| w.hwnd);
+            platform::focus(windows::Win32::Foundation::HWND(self.shell.sofa as *mut _));
+            self.ps_home(came, now);
+        } else {
+            sound::play(Sound::Notice);
+        }
+        self.layers.push(Layer::Dialog {
+            title: "Sleeping in 60 seconds".into(),
+            body: "Your sleep timer is ending. Games and videos stay where they are while the PC sleeps.".into(),
+            opts: vec![Opt::new("Stay awake", Act::StayAwake).icon("play"), Opt::new("Sleep now", Act::SleepNow).icon("sleep")],
+            focus: 0,
+        });
+        self.dirty = true;
+    }
+
+    /// QA only: the sleep timer ends in under a minute, so its warning shows at once.
+    pub fn qa_sleep_soon(&mut self) {
+        self.sleep_at = Some(epoch_ms() + 59_000.0);
+        self.sleep_warned = false;
+        self.dirty = true;
+    }
+}
+
+/// "Playlist · 42 songs · by Greg", "Album · Daft Punk · 13 songs", "Your Liked Songs · 512 songs".
+pub(crate) fn pick_meta(p: &Pick, user: Option<&str>) -> String {
+    let songs = p.songs.map(spotify::songs_text);
+    let mut parts: Vec<String> = Vec::new();
+    match p.kind {
+        spotify::Kind::Liked => {
+            parts.push("Your Liked Songs".into());
+            parts.extend(songs);
+        }
+        spotify::Kind::Playlist => {
+            parts.push("Playlist".into());
+            parts.extend(songs);
+            if !p.by.is_empty() && Some(p.by.as_str()) != user {
+                parts.push(format!("by {}", p.by));
+            }
+        }
+        spotify::Kind::Album => {
+            parts.push("Album".into());
+            if !p.by.is_empty() {
+                parts.push(p.by.clone());
+            }
+            parts.extend(songs);
+        }
+    }
+    parts.join("  ·  ")
+}
+
+/// Spotify: the Music tab, Home's row, its setup and account sheets, and playing.
+impl App {
+    pub(crate) fn pick(&self, uri: &str) -> Option<&Pick> {
+        self.music.library.iter().find(|p| p.uri == uri)
+    }
+
+    /// The Music tab: Liked Songs and the playlists, then the albums; or the way to connect.
+    fn music_rows(&self) -> Vec<Row> {
+        let m = &self.music;
+        if !m.ready {
+            // Signed in and reading: the account tile says so; otherwise, Connect.
+            let tile = if m.configured && m.error.is_none() { Mu::Account } else { Mu::Setup };
+            return vec![Row { key: "spotify".into(), title: "Spotify".into(), count: 0, tiles: vec![Tile::Music(tile)] }];
+        }
+        let tiles_of = |albums: bool| -> Vec<Tile> { m.library.iter().filter(|p| (p.kind == spotify::Kind::Album) == albums).map(|p| Tile::Music(Mu::Play(p.uri.clone()))).collect() };
+        let mut lists = tiles_of(false);
+        let n = lists.len();
+        lists.push(Tile::Music(Mu::Account));
+        let mut rows = vec![Row { key: "playlists".into(), title: "Playlists".into(), count: n, tiles: lists }];
+        let albums = tiles_of(true);
+        if !albums.is_empty() {
+            rows.push(Row { key: "albums".into(), title: "Albums".into(), count: albums.len(), tiles: albums });
+        }
+        rows
+    }
+
+    fn music_action(&mut self, m: Mu) {
+        sound::play(Sound::Select);
+        match m {
+            Mu::Play(uri) => self.play_music(&uri, false),
+            Mu::Setup => self.spotify_setup(),
+            Mu::Account => self.spotify_account(),
+        }
+        self.dirty = true;
+    }
+
+    /// Plays something on this PC's Spotify app (a QA run only says it would).
+    fn play_music(&mut self, uri: &str, shuffle: bool) {
+        let Some(p) = self.pick(uri).cloned() else { return };
+        if self.qa {
+            self.toast(&format!("Playing {}", p.name), "Spotify, on this PC");
+            return;
+        }
+        self.music.starting = Some(uri.to_owned());
+        self.spotify.send(spotify::Req::Play { uri: uri.to_owned(), name: p.name, shuffle });
+    }
+
+    /// WM_MUSIC: Spotify's state changed (or it asks Sofa to open the sign-in, show a notice,
+    /// or come back to the front).
+    pub fn music_changed(&mut self, now: f64) {
+        let spotify::Taken { open, notice, come_back, save } = self.spotify.take();
+        if let Some(cfg) = save {
+            self.store.map_mut("music").insert("spotify".into(), cfg);
+            self.store.flush();
+        }
+        if let Some(url) = open
+            && !self.qa
+        {
+            // The sign-in is a web page: Sofa steps aside for the browser.
+            self.shell.step_down(now);
+            platform::open(&url);
+        }
+        if let Some((title, body)) = notice {
+            self.toast(&title, &body);
+        }
+        if come_back && !self.qa && !self.focused {
+            platform::focus(windows::Win32::Foundation::HWND(self.shell.sofa as *mut _));
+        }
+        let m = self.spotify.snapshot();
+        if m == self.music {
+            return;
+        }
+        let rows = m.library != self.music.library || m.ready != self.music.ready || m.configured != self.music.configured || m.error != self.music.error;
+        self.music = m;
+        if self.music.ready {
+            self.layers.retain(|l| !matches!(l, Layer::Sheet { kind: SheetKind::SpSetup, .. }));
+        }
+        // Disconnected without Spotify installed: the Music tab goes.
+        if self.tab == "music" && !self.tabs().iter().any(|(k, _)| *k == "music") {
+            self.set_tab("home", now);
+        }
+        self.refresh_sp_setup(usize::MAX);
+        if rows && (self.tab == "home" || self.tab == "music") {
+            if self.layers_hold_items() {
+                self.music_stale = true;
+            } else {
+                self.rebuild(true);
+                if let Some(id) = self.focused_tile_id() {
+                    self.show_hero(id, now);
+                }
+            }
+        }
+        self.dirty = true;
+    }
+
+    fn sp_setup_opts(&self) -> Vec<Opt> {
+        let id = &self.sp_id;
+        let ok = spotify::client_id_ok(id);
+        let step = |icon: &'static str| if ok { "check" } else { icon };
+        let short = if id.len() > 6 { format!("{}…", &id[..6]) } else { id.clone() };
+        let connect = if self.music.signing_in {
+            "Waiting for your browser. Approve Sofa there.".to_owned()
+        } else if let Some(e) = &self.music.error {
+            e.clone()
+        } else {
+            "Your browser opens once. Approve Sofa there, then come back.".to_owned()
+        };
+        vec![
+            Opt::new("Make a Spotify app", Act::SpPage).icon(step("globe")).detail("Opens developer.spotify.com. Create an app named Sofa and tick Web API. Spotify asks for Premium on this account."),
+            Opt::new("Add the redirect", Act::SpPage).icon(step("link")).detail(format!("In the app's settings, add the redirect URI {} and save.", spotify::REDIRECT)),
+            Opt::new("Paste the Client ID", Act::SpId).icon(step("rename")).detail("Copy it from the app's settings, then select this.").value(short),
+            Opt::new("Sign in", Act::SpConnect).icon("play").detail(connect),
+        ]
+    }
+
+    /// Connect Spotify: one-time setup, step by step (like Connect Discord).
+    fn spotify_setup(&mut self) {
+        sound::play(Sound::Open);
+        if self.sp_id.is_empty() {
+            self.sp_id = self.store.map("music").get("spotify").and_then(|s| s.get("clientId")).and_then(Value::as_str).unwrap_or("").to_owned();
+        }
+        let focus = if spotify::client_id_ok(&self.sp_id) { 3 } else if self.sp_id.is_empty() { 0 } else { 2 };
+        self.layers.push(Layer::Sheet {
+            title: "Connect Spotify".into(),
+            sub: "One-time setup, about two minutes. Spotify only lets apps you made control playback.".into(),
+            opts: self.sp_setup_opts(),
+            focus,
+            kind: SheetKind::SpSetup,
+        });
+    }
+
+    /// The setup sheet follows what happened; `step` moves its focus (usize::MAX keeps it).
+    fn refresh_sp_setup(&mut self, step: usize) {
+        let opts = self.sp_setup_opts();
+        for l in &mut self.layers {
+            if let Layer::Sheet { opts: o, focus, kind: SheetKind::SpSetup, .. } = l {
+                *o = opts.clone();
+                if step != usize::MAX {
+                    *focus = step.min(o.len() - 1);
+                }
+            }
+        }
+    }
+
+    fn spotify_account(&mut self) {
+        sound::play(Sound::Open);
+        let who = self.music.user.clone().unwrap_or_else(|| "your account".into());
+        let sub = match &self.music.error {
+            Some(e) => e.clone(),
+            None => format!("Signed in as {who}. Sofa plays through the Spotify app on this PC."),
+        };
+        self.layers.push(Layer::Sheet {
+            title: "Spotify".into(),
+            sub,
+            opts: vec![Opt::new("Refresh library", Act::SpRefresh).icon("rescan"), Opt::new("Sign in again", Act::SpRedo).icon("restart"), Opt::new("Disconnect", Act::SpForget).icon("close")],
+            focus: 0,
+            kind: SheetKind::SpAccount,
+        });
+    }
+
+    fn sp_run(&mut self, act: Act, now: f64) {
+        match act {
+            Act::SpPage => {
+                if !self.qa {
+                    self.shell.step_down(now);
+                    platform::open(spotify::DASHBOARD);
+                }
+            }
+            Act::SpId => {
+                // Copied on the PC: selecting the step pastes it.
+                let clip = platform::clipboard_text().trim().to_owned();
+                if spotify::client_id_ok(&clip) {
+                    self.sp_id = clip;
+                    self.music.error = None;
+                    self.refresh_sp_setup(3);
+                } else {
+                    let id = self.sp_id.clone();
+                    self.keyboard(KbPurpose::SpId, id);
+                }
+            }
+            Act::SpConnect => {
+                if !spotify::client_id_ok(&self.sp_id) {
+                    self.music.error = Some("The Client ID is 32 letters and digits, from your Spotify app's settings.".into());
+                    return self.refresh_sp_setup(2);
+                }
+                self.music.error = None;
+                self.music.signing_in = true;
+                self.spotify.send(spotify::Req::Connect(self.sp_id.clone()));
+                self.refresh_sp_setup(3);
+            }
+            Act::SpRedo => {
+                self.layers.pop();
+                self.spotify_setup();
+            }
+            Act::SpRefresh => {
+                self.layers.pop();
+                self.spotify.send(spotify::Req::Refresh);
+            }
+            Act::SpForget => self.layers.push(Layer::Dialog {
+                title: "Disconnect Spotify?".into(),
+                body: "Sofa forgets the app and its sign-in. Your Spotify account and its music stay as they are.".into(),
+                opts: vec![Opt::new("Disconnect", Act::SpForgetNow).icon("close"), Opt::new("Cancel", Act::Close).icon("restart")],
+                focus: 1,
+            }),
+            Act::SpForgetNow => {
+                self.layers.retain(|l| !matches!(l, Layer::Dialog { .. } | Layer::Sheet { kind: SheetKind::SpAccount, .. }));
+                self.sp_id.clear();
+                self.spotify.send(spotify::Req::Forget);
+                if self.qa {
+                    self.spotify.set(Music::default());
+                    self.music_changed(now);
+                }
+            }
+            Act::SpPlay(uri, shuffle) => {
+                self.layers.retain(|l| !matches!(l, Layer::Sheet { kind: SheetKind::Music, .. }));
+                self.play_music(&uri, shuffle);
+            }
+            Act::SpOpen(uri) => {
+                self.layers.pop();
+                if !self.qa {
+                    self.shell.step_down(now);
+                    platform::open(&uri);
+                }
+            }
+            _ => {}
+        }
+        self.dirty = true;
+    }
+}
+
+/// The sleep timer's one-minute warning.
+fn is_sleep_warning(l: &Layer) -> bool {
+    matches!(l, Layer::Dialog { opts, .. } if opts.iter().any(|o| matches!(o.act, Act::StayAwake)))
 }
 
 /// A key press and release, as a remote (or keyboard) sends it, to the window in front.

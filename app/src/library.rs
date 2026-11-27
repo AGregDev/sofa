@@ -46,6 +46,8 @@ pub struct Item {
     pub confirm: bool,
     pub favorite: bool,
     pub last_played: f64,
+    /// Minutes played in all (Steam keeps it; 0 when unknown).
+    pub playtime: u32,
 }
 
 // ---------- vdf helpers ----------
@@ -93,7 +95,9 @@ static STEAM_SKIP: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)redistributable|steamworks common|proton|steam linux runtime|steamvr|dedicated server|\bsdk\b").unwrap());
 const STEAM_SKIP_IDS: [&str; 4] = ["228980", "1070560", "1391110", "1628350"];
 
-fn steam_last_played(root: &Path) -> HashMap<String, f64> {
+/// Each Steam game's last start (epoch ms) and minutes played in all, from every account on the
+/// PC (the latest start and the most minutes win).
+fn steam_last_played(root: &Path) -> HashMap<String, (f64, u32)> {
     let mut result = HashMap::new();
     let Ok(users) = std::fs::read_dir(root.join("userdata")) else { return result };
     for u in users.flatten() {
@@ -102,10 +106,10 @@ fn steam_last_played(root: &Path) -> HashMap<String, f64> {
         let Some(Value::Object(apps)) = apps else { continue };
         for (id, a) in apps {
             let t = text_field(&a, "LastPlayed").and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0) * 1000.0;
-            let e = result.entry(id).or_insert(0.0);
-            if t > *e {
-                *e = t;
-            }
+            let minutes = text_field(&a, "Playtime").and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+            let e = result.entry(id).or_insert((0.0, 0));
+            e.0 = e.0.max(t);
+            e.1 = e.1.max(minutes);
         }
     }
     result
@@ -185,7 +189,8 @@ fn scan_steam(root: &Path) -> Vec<Item> {
                 project: None,
                 confirm: false,
                 favorite: false,
-                last_played: played.get(&appid).copied().unwrap_or(0.0),
+                last_played: played.get(&appid).map_or(0.0, |p| p.0),
+                playtime: played.get(&appid).map_or(0, |p| p.1),
             });
         }
     }
@@ -252,6 +257,7 @@ fn scan_recomp(cache: &Path) -> Vec<Item> {
             confirm: false,
             favorite: false,
             last_played: g.get("last_played").and_then(Value::as_f64).unwrap_or(0.0) * 1000.0,
+            playtime: 0,
         });
     }
     items
@@ -378,7 +384,8 @@ pub fn build(cache: &Path, overrides: &serde_json::Map<String, Value>, recent: &
     let mut seen_names = HashSet::new();
     for (name, id, icon) in start_apps(cache) {
         let lid = id.to_lowercase();
-        if lid.starts_with("steam:") || game_paths.iter().any(|p| lid.starts_with(p.as_str())) {
+        // Sofa's own shortcut: Sofa is already open.
+        if lid.starts_with("steam:") || lid.ends_with("\\sofa.exe") || game_paths.iter().any(|p| lid.starts_with(p.as_str())) {
             continue;
         }
         let name = friendly_name(&name, &id);
@@ -400,6 +407,7 @@ pub fn build(cache: &Path, overrides: &serde_json::Map<String, Value>, recent: &
             confirm: false,
             favorite: false,
             last_played: 0.0,
+            playtime: 0,
         });
     }
     for (key, name, url, tv, color) in WEB {
@@ -424,6 +432,7 @@ pub fn build(cache: &Path, overrides: &serde_json::Map<String, Value>, recent: &
             confirm: false,
             favorite: false,
             last_played: 0.0,
+            playtime: 0,
         });
     }
     for (key, name, confirm, uri) in SYSTEM {
@@ -442,6 +451,7 @@ pub fn build(cache: &Path, overrides: &serde_json::Map<String, Value>, recent: &
             confirm,
             favorite: false,
             last_played: 0.0,
+            playtime: 0,
         });
     }
     // Colours the Electron app computed from each item's art.
@@ -553,6 +563,7 @@ mod tests {
             confirm: false,
             favorite: false,
             last_played: 0.0,
+            playtime: 0,
         }
     }
 

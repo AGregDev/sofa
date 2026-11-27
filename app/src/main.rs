@@ -7,14 +7,17 @@
 //! `Sofa.exe --uninstall` removes it (see `install.rs`).
 #![windows_subsystem = "windows"]
 
+mod audio;
 mod gfx;
 mod icons;
 mod input;
 mod install;
 mod library;
+mod media;
 mod platform;
 mod shell;
 mod social;
+mod spotify;
 mod sound;
 mod startmenu;
 mod store;
@@ -45,6 +48,8 @@ const WM_SHOW: u32 = 0x8000 + 7;
 const WM_QA_TRIM: u32 = 0x8000 + 9;
 /// QA only: the PS button was pressed in the window `wparam` (a stand-in for a game).
 const WM_QA_RUN: u32 = 0x8000 + 10;
+/// QA only: the sleep timer ends in a minute (its warning shows at once).
+const WM_QA_SLEEP: u32 = 0x8000 + 13;
 
 thread_local! {
     static APP: RefCell<Option<ui::App>> = const { RefCell::new(None) };
@@ -88,7 +93,9 @@ fn log_state(app: &ui::App) {
     }
 }
 
-fn key_action(vk: VIRTUAL_KEY) -> Option<Action> {
+/// The keys Sofa reads as actions (also the keys held back from other programs while Sofa is
+/// in front, `platform::Hold::SofaKeys`).
+pub(crate) fn key_action(vk: VIRTUAL_KEY) -> Option<Action> {
     use input::Action::*;
     Some(match vk {
         VK_UP => Up,
@@ -105,6 +112,8 @@ fn key_action(vk: VIRTUAL_KEY) -> Option<Action> {
         VIRTUAL_KEY(0x45) => TabNext, // E
         VK_OEM_4 => TabPrev,          // [
         VK_OEM_6 => TabNext,          // ]
+        VK_OEM_MINUS => VolDown,      // -
+        VK_OEM_PLUS => VolUp,         // =
         _ => return None,
     })
 }
@@ -150,13 +159,17 @@ fn ours(msg: u32) -> bool {
             | WM_SHOW
             | WM_QA_TRIM
             | WM_QA_RUN
+            | WM_QA_SLEEP
             | gfx::WM_IMAGE
             | input::WM_PAD_HOME
             | input::WM_PAD_INPUT
+            | input::WM_PAD_MUTE
             | ui::WM_LIBRARY
             | ui::WM_ICON
             | ui::WM_STEAM
             | social::WM_SOCIAL
+            | media::WM_MEDIA
+            | spotify::WM_MUSIC
     )
 }
 
@@ -276,6 +289,15 @@ fn handle(hwnd: HWND, msg: u32, w: usize, l: isize) -> Option<LRESULT> {
         }
         // The DualSense's buttons changed: the loop wakes up and polls.
         input::WM_PAD_INPUT => Some(LRESULT(0)),
+        input::WM_PAD_MUTE => {
+            if !qa() {
+                with_app(|app| {
+                    app.mute_button(t);
+                    log_state(app);
+                });
+            }
+            Some(LRESULT(0))
+        }
         ui::WM_LIBRARY => {
             with_app(|app| {
                 app.library_changed();
@@ -301,6 +323,17 @@ fn handle(hwnd: HWND, msg: u32, w: usize, l: isize) -> Option<LRESULT> {
             });
             Some(LRESULT(0))
         }
+        media::WM_MEDIA => {
+            with_app(|app| app.media_changed());
+            Some(LRESULT(0))
+        }
+        spotify::WM_MUSIC => {
+            with_app(|app| {
+                app.music_changed(t);
+                log_state(app);
+            });
+            Some(LRESULT(0))
+        }
         WM_SHOW => {
             with_app(|app| {
                 if !app.qa {
@@ -312,6 +345,14 @@ fn handle(hwnd: HWND, msg: u32, w: usize, l: isize) -> Option<LRESULT> {
         }
         WM_QA_TRIM if qa() => {
             with_app(|app| app.trim());
+            Some(LRESULT(0))
+        }
+        WM_QA_SLEEP if qa() => {
+            with_app(|app| {
+                app.qa_sleep_soon();
+                app.animating(t);
+                log_state(app);
+            });
             Some(LRESULT(0))
         }
         WM_QA_RUN if qa() => {
@@ -587,9 +628,19 @@ fn main() -> Result<()> {
                         app.remote_action(a);
                     }
                 }
-                // Only Sofa turns the controller into input while the streaming window is in
-                // front (Steam's desktop layout would press other keys for the same buttons).
-                platform::hold_synthetic_input(remote);
+                // Sofa turns the controller into input itself: while the streaming window it
+                // opened is in front, other programs' keys and clicks are held back; while Sofa
+                // is in front with a pad it reads (a DualSense or an XInput pad), only their keys
+                // that Sofa reads as actions are (Steam's desktop layout sent Enter for ○).
+                let reads_pad = app.input.info().connected || app.input.xinput_active();
+                let hold = if remote {
+                    platform::Hold::All
+                } else if !qa_run && focused && reads_pad {
+                    platform::Hold::SofaKeys
+                } else {
+                    platform::Hold::Off
+                };
+                platform::hold_synthetic_input(hold);
                 app.trim_if_idle(t);
                 let anim = app.animating(t);
                 // While Sofa's launch screen covers a starting browser, it keeps animating.

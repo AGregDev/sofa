@@ -70,7 +70,11 @@ impl Color {
         }
         let inner = s.strip_prefix("hsl(")?.strip_suffix(')')?;
         let n: Vec<f32> = inner.split([' ', ',']).filter(|p| !p.is_empty()).filter_map(|p| p.trim_end_matches('%').parse().ok()).collect();
-        let (h, s, l) = (*n.first()? / 360.0, *n.get(1)? / 100.0, *n.get(2)? / 100.0);
+        Some(Color::hsl(*n.first()?, *n.get(1)? / 100.0, *n.get(2)? / 100.0))
+    }
+    /// Hue in degrees, saturation and lightness from 0 to 1.
+    pub fn hsl(h: f32, s: f32, l: f32) -> Color {
+        let h = h / 360.0;
         let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
         let p = 2.0 * l - q;
         let f = |mut t: f32| {
@@ -85,7 +89,12 @@ impl Color {
                 p
             }
         };
-        Some(Color(f(h + 1.0 / 3.0), f(h), f(h - 1.0 / 3.0), 1.0))
+        Color(f(h + 1.0 / 3.0), f(h), f(h - 1.0 / 3.0), 1.0)
+    }
+    /// As 8-bit red, green and blue.
+    pub fn rgb8(self) -> (u8, u8, u8) {
+        let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        (c(self.0), c(self.1), c(self.2))
     }
     fn d2d(self) -> D2D1_COLOR_F {
         D2D1_COLOR_F { r: self.0, g: self.1, b: self.2, a: self.3 }
@@ -122,6 +131,49 @@ struct ImageKey {
 struct Decoded {
     key: ImageKey,
     pixels: Option<(u32, u32, Vec<u8>)>,
+    tone: Option<Color>,
+}
+
+/// The art's most vivid colour (Sofa 1.x's `vibrantColor`): hues on a 12 x 12 grid, averaged
+/// with saturated, bright pixels counting most, as a mid-light colour. None for grey art.
+/// `px` is premultiplied BGRA, `w` x `h`.
+pub(crate) fn tone(px: &[u8], w: u32, h: u32) -> Option<Color> {
+    if w == 0 || h == 0 || px.len() < (w * h * 4) as usize {
+        return None;
+    }
+    let (mut x, mut y, mut sum) = (0f32, 0f32, 0f32);
+    for gy in 0..12u32 {
+        for gx in 0..12u32 {
+            let (px_x, px_y) = ((gx * 2 + 1) * w / 24, (gy * 2 + 1) * h / 24);
+            let i = ((px_y * w + px_x) * 4) as usize;
+            let a = f32::from(px[i + 3]) / 255.0;
+            if a <= 0.0 {
+                continue;
+            }
+            let (b, g, r) = (f32::from(px[i]) / 255.0 / a, f32::from(px[i + 1]) / 255.0 / a, f32::from(px[i + 2]) / 255.0 / a);
+            let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+            let sat = if max == 0.0 { 0.0 } else { (max - min) / max };
+            let weight = a * sat * sat * max + 0.0001;
+            if max - min < 1e-4 {
+                // Grey has no hue: it only weakens the others.
+                sum += weight;
+                continue;
+            }
+            let hue = if max == r {
+                ((g - b) / (max - min)) % 6.0
+            } else if max == g {
+                (b - r) / (max - min) + 2.0
+            } else {
+                (r - g) / (max - min) + 4.0
+            } * std::f32::consts::PI
+                / 3.0;
+            x += hue.cos() * weight;
+            y += hue.sin() * weight;
+            sum += weight;
+        }
+    }
+    let strength = (x.hypot(y) / sum.max(1e-6)).min(1.0);
+    (strength >= 0.15).then(|| Color::hsl((y.atan2(x).to_degrees() + 360.0) % 360.0, 0.85, 0.58))
 }
 
 enum Slot {
@@ -138,7 +190,8 @@ fn decoder_thread(rx: Receiver<ImageKey>, tx: Sender<Decoded>, hwnd: isize) {
     let wic: Option<IWICImagingFactory> = unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) }.ok();
     for key in rx {
         let pixels = wic.as_ref().and_then(|wic| decode(wic, &key).ok());
-        if tx.send(Decoded { key, pixels }).is_err() {
+        let tone = pixels.as_ref().and_then(|(w, h, px)| tone(px, *w, *h));
+        if tx.send(Decoded { key, pixels, tone }).is_err() {
             break;
         }
         // SAFETY: posting to our own window; a closed window just drops the message.
@@ -431,6 +484,8 @@ pub struct Gfx {
     layouts: HashMap<LayoutKey, (IDWriteTextLayout, u64)>,
     icons: HashMap<(&'static str, bool), ID2D1PathGeometry1>,
     images: HashMap<ImageKey, Slot>,
+    /// Each decoded image's most vivid colour (kept when the images go: a few bytes each).
+    tones: HashMap<PathBuf, Color>,
     image_bytes: u64,
     requests: Sender<ImageKey>,
     decoded: Receiver<Decoded>,
@@ -525,6 +580,7 @@ impl Gfx {
                 layouts: HashMap::new(),
                 icons: HashMap::new(),
                 images: HashMap::new(),
+                tones: HashMap::new(),
                 image_bytes: 0,
                 requests,
                 decoded,
@@ -784,6 +840,9 @@ impl Gfx {
         let mut any = false;
         while let Ok(d) = self.decoded.try_recv() {
             any = true;
+            if let Some(t) = d.tone {
+                self.tones.insert(d.key.path.clone(), t);
+            }
             let slot = match d.pixels {
                 Some((w, h, px)) => {
                     let props = D2D1_BITMAP_PROPERTIES1 {
@@ -917,6 +976,11 @@ impl Gfx {
         }
     }
 
+    /// The most vivid colour of an image that was drawn, once it has been decoded.
+    pub fn tone(&self, path: &Path) -> Option<Color> {
+        self.tones.get(path).copied()
+    }
+
     /// Forgets images that could not be loaded, so files written since are tried again.
     pub fn retry_failed(&mut self) {
         self.images.retain(|_, s| !matches!(s, Slot::Failed));
@@ -951,5 +1015,34 @@ fn load_font(dwrite: &IDWriteFactory5, woff2: &[u8]) -> Result<IDWriteFontCollec
         builder.AddFontFile(&file)?;
         let set = builder.CreateFontSet()?;
         dwrite.CreateFontCollectionFromFontSet(&set)?.cast()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn solid(b: u8, g: u8, r: u8) -> Vec<u8> {
+        [b, g, r, 255].repeat(24 * 24)
+    }
+
+    #[test]
+    fn tone_finds_the_hue_of_vivid_art() {
+        let (r, g, b) = tone(&solid(0, 0, 220), 24, 24).expect("red art has a tone").rgb8();
+        assert!(r > 200 && g < 90 && b < 90, "{r} {g} {b}");
+        let (r, g, b) = tone(&solid(200, 40, 20), 24, 24).expect("blue art has a tone").rgb8();
+        assert!(b > 200 && r < 120, "{r} {g} {b}");
+    }
+
+    #[test]
+    fn grey_art_has_no_tone() {
+        assert!(tone(&solid(120, 120, 120), 24, 24).is_none());
+        assert!(tone(&[], 0, 0).is_none());
+    }
+
+    #[test]
+    fn hsl_matches_the_electron_colours() {
+        assert_eq!(Color::parse("hsl(0 100% 50%)").map(Color::rgb8), Some((255, 0, 0)));
+        assert_eq!(Color::hsl(120.0, 1.0, 0.25).rgb8(), (0, 128, 0));
     }
 }

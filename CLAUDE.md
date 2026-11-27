@@ -30,10 +30,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File qa\qa.ps1   # automated QA, 
 | Path | What it does |
 | --- | --- |
 | `app/src/main.rs` | window, message loop, single instance, PS button routing, deferred messages, setup/uninstall/scan modes, log |
-| `app/src/ui.rs` | state and behaviour: rows, focus, tabs, layers (sheets, dialogs, keyboard, welcome, launch), settings, Running cards, Steam fix, notices, memory trim |
-| `app/src/view.rs` | all drawing: top bar, hero, shelf, tiles, hints, layers, toast, start-up |
+| `app/src/ui.rs` | state and behaviour: rows, focus, tabs, layers (sheets, dialogs, keyboard, welcome, launch, quick menu), settings, Running cards, Steam fix, notices, memory trim, sleep timer, DualSense lights |
+| `app/src/view.rs` | all drawing: top bar, hero, shelf, tiles, hints, layers, quick menu, toast, start-up |
 | `app/src/gfx.rs` | Direct2D on a DXGI flip swap chain, DirectWrite (Figtree from the WOFF2), WIC decode thread, SVG icon paths, image budget |
-| `app/src/input.rs` | keyboard, XInput (Guide via ordinal 100), DualSense over HID on its own thread, layouts, repeat, duplicate-press filter |
+| `app/src/input.rs` | keyboard, XInput (Guide via ordinal 100), DualSense over HID on its own thread (buttons, mute button, output reports for its lights), layouts, repeat, duplicate-press filter |
+| `app/src/audio.rs` | sound outputs and the default one (policy config interface), volume, microphone mute |
+| `app/src/media.rs` | Now playing: Windows' media sessions on the `media` thread, play, pause, skip, art |
+| `app/src/spotify.rs` | Spotify on the `spotify` thread: PKCE sign-in answered on 127.0.0.1, library (Liked Songs, playlists, albums, covers), playback on this PC |
 | `app/src/shell.rs` | foreground events: topmost while home, the guard (desktop, taskbar, Start, Search), Steam push-down, full-screen sessions, Running windows |
 | `app/src/library.rs` | Steam (through `crates/vdf`), RecompLauncher, Start menu (from `cache\startmenu.json`), web and system tiles, `identify` |
 | `app/src/social.rs` | Discord voice: RPC pipe on the `discord` thread, OAuth over WinHTTP, secrets (DPAPI, and 1.x's safeStorage values) |
@@ -67,17 +70,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File qa\qa.ps1   # automated QA, 
   are deferred; everything else must reach DefWindowProc (WM_QUERYOPEN answered 0 keeps a
   minimized window minimized).
 - **Synthetic input** (SendInput, keybd_event) must carry `platform::SOFA_MARK` in
-  `dwExtraInfo`: while a streaming window Sofa opened is in front, unmarked synthetic input is
-  held back (Steam's desktop layout), and the PS button's Alt tap would be lost without it.
+  `dwExtraInfo`: while a streaming window Sofa opened is in front, all unmarked synthetic
+  input is held back (`platform::Hold::All`); while Sofa itself is in front with a DualSense or
+  XInput pad it reads, only unmarked keys Sofa reads as actions are (`Hold::SofaKeys`: Steam's
+  desktop layout sent Enter for ○, which acted as ✕). Holding everything there stopped
+  Chromium apps (Spotify) from faking the key press that brings their window forward. The PS
+  button's Alt tap would be lost without the mark.
   `cargo test --bin sofa -- --ignored` checks the hold (it sends F24 system-wide).
 - **Discord** runs only outside QA mode and only on its own thread; the UI reads `Voice` and
-  saves `social.discord` when the thread hands it over (same keys as 1.x).
+  saves `social.discord` when the thread hands it over (same keys as 1.x). **Spotify** follows
+  the same pattern (`Music`, `music.spotify`); a QA run shows a made-up library and plays
+  nothing.
 - **Memory is the point.** Decode art at the size it is drawn (`image_sized` with the
   focused size, so zooming never decodes twice), stay under the image budget, give memory
   back 15 s after a game takes the screen, and keep Windows' shell code (icons, Start menu)
   in the `--scan` child. Measure with the QA run (P1 to P4).
 - **No rumble or output reports on focus moves.** Bluetooth output reports on every move
-  caused lag in 1.x.
+  caused lag in 1.x. The `dualsense` thread writes `Lights` only when they changed, between
+  reads; the UI changes the lightbar only after focus rested 0.7 s, and only while Sofa is in
+  front (behind a game, only the mute LED, after the mute button).
+- **Sound, players and the sleep timer touch the real world.** In QA mode `audio.rs` setters
+  are never called (made-up devices in `AudioState::qa`), the `media` thread does not run (a
+  made-up track), the lights are never armed and the sleep timer never calls
+  `platform::sleep`.
 - **The PS button.** The DualSense thread posts `WM_PAD_HOME` (wparam 0 PS, 1 Create +
   Options) even while a game has focus; XInput's Guide comes from `poll`. Both go through
   `home_button`, which drops duplicates within 350 ms. With "Home button: Create +

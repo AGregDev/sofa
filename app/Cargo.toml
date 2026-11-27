@@ -1,6 +1,6 @@
 [package]
 name = "sofa"
-version = "2.1.0"
+version = "2.2.0"
 edition = "2024"
 rust-version = "1.97"
 publish = false
@@ -56,6 +56,14 @@ features = [
   "Win32_System_DataExchange",
   "Win32_System_Memory",
   "Win32_Media_Audio",
+  "Win32_Media_Audio_Endpoints",
+  "Win32_UI_Shell_PropertiesSystem",
+  "Win32_System_Variant",
+  "Foundation",
+  "Media",
+  "Media_Control",
+  "Storage",
+  "Storage_Streams",
   "Win32_Networking_WinHttp",
   "Win32_Security_Cryptography",
   "Win32_System_Pipes",

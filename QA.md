@@ -29,15 +29,31 @@ writes `shots\qa.txt`. Exit code 0 means every check passed.
 | H1 | Home has rows and the library |
 | H2 | Right moves along the row |
 | H3 | Down moves to the next row |
-| H4 | Home goes back to the first tile |
-| T1 | R1 walks the tabs and wraps (Games, Media, Apps, Social, System, Home) |
+| H4 | Back (○) on Home returns to the first tile |
+| U1 | PS on Home opens the quick menu, what is playing first (a made-up track in QA) |
+| U2 | ✕ pauses what is playing |
+| U3 | Right moves along the quick menu |
+| U4 | R2 raises the volume a step (made-up devices in QA: nothing real changes) |
+| U5 | The microphone mutes |
+| U6, U7, U8 | The sleep timer starts at 30 minutes, steps up to 2 hours, then turns off |
+| U9 | Sound output lists the outputs, the one in use in focus |
+| U10 | Choosing an output switches the sound and returns to the menu |
+| U11 | PS again closes the quick menu |
+| U12 | The sleep timer warns a minute before the PC sleeps (QA message 0x8000 + 13) |
+| U13 | Stay awake turns the timer off (a QA run never sleeps the PC) |
+| T1 | R1 walks the tabs and wraps (Games, Media, Music, Apps, Social, System, Home) |
 | T2 | L1 goes back a tab |
 | T3 | Back returns to Home |
+| SP1 | The Music tab lists Liked Songs, playlists and albums (a made-up library in QA) |
+| SP2 | ✕ plays it on this PC (QA plays nothing and says what would play) |
+| SP3 | △ offers Play, Shuffle play and Open in Spotify |
+| SP4 | Home has a Music row |
 | C1 | Options opens Settings |
 | C2 | Focus moves down the list |
 | C3, C4 | Reduce motion switches on and off (saved) |
 | C5 | Show hidden apps switches on |
 | C6, C7 | Home button: Create + Options, then PS again (saved) |
+| C9 | Controller light cycles: Game's colour, Amber, Off (saved as `controllerLight`) |
 | C8 | Back closes Settings |
 | K1 | Square opens search |
 | K2 | Typing finds games and apps |
@@ -54,7 +70,7 @@ writes `shots\qa.txt`. Exit code 0 means every check passed.
 | G3 | Launching records Jump back in |
 | R1 | PS from an app adds a Running card, first and focused |
 | R2 | Triangle on Running opens its menu (Resume, Close, Force close) |
-| R3 | A closed app loses its card |
+| R3 | A closed app loses its card (PS on Home checks the cards before the quick menu opens) |
 | O1 | A second start hands over to the first and exits |
 | P1 | Memory on Home under 150 MB |
 | P2 | Idle CPU under 1 % of a core |
@@ -75,6 +91,7 @@ writes `shots\qa.txt`. Exit code 0 means every check passed.
 | --- | --- |
 | `crates/vdf` | The Rust VDF parser against 172 cases recorded from the original JavaScript (`tests/cases.jsonl`) |
 | `crates/steam` | G1 to G15: the Steam settings editor, on a made-up `localconfig.vdf` in a temp folder, never a real Steam install |
+| `app` | DualSense output reports (USB and Bluetooth layout, CRC-32, a mute-LED-only report leaves the lightbar alone), colour from art, sound output names and kinds, player names, Spotify's PKCE challenge (RFC 7636's example), sign-in answer parsing and Client IDs, Start menu matching |
 
 G1 to G15: a file without the key reads as on; turning it off adds the key with 0 and
 changes nothing else; a file with the setting on reads 1; turning it off replaces only
@@ -125,8 +142,33 @@ These need a person, a TV and a controller.
 | M13 | YouTube: Sofa's launch screen, then YouTube's own screen, no browser window or "press Esc" bubble; D-pad, Cross and Circle move, select and go back, Square plays and pauses, with Steam running and without |
 | M14 | Discord: Home shows your channel with Mute, Deafen, Leave and recent channels; Mute flips at once and Discord agrees; a server's sheet joins a channel |
 | M15 | A Running card for a browser shows the browser's name and icon; the hero shows the page |
+| M16 | The lightbar takes a game's colour after focus rests on it, and does not change while moving quickly along a row (no lag over Bluetooth) |
+| M17 | The mute button mutes the microphone from inside a game, its LED lights; in a Discord voice channel it mutes you in Discord |
+| M18 | Quick menu: Sound output switches between the TV and headphones, and a game or video keeps playing on the new output |
+| M19 | Quick menu: Spotify playing shows its track and art; ✕ pauses, L1 and R1 skip |
+| M20 | Sleep timer: over a game, Sofa comes forward a minute before; Stay awake returns to the game; left alone, the PC sleeps |
+| M21 | Connect Spotify with a real app: the browser opens once, Sofa comes back with "Spotify connected"; Music lists the library with covers |
+| M22 | ✕ on a playlist plays it in the Spotify app on this PC, starting Spotify when it is closed; Sofa stays in front |
+| M23 | With Steam open (desktop layout on), ○ on Home goes back and never opens the focused tile, on a DualSense and on an Xbox pad |
+| M24 | Xbox pad: the first-run screen and Settings offer "Keep Game Bar off the Xbox button"; with it on, the Xbox button opens Sofa and not Game Bar; off again, Game Bar opens as before |
 
 ## Results
+
+### 2.2.0 (2026-11-27)
+
+- Automated UI run: 71 of 71 PASS (new: U1 to U13, C9, SP1 to SP4; H4 is now Back on Home,
+  since PS on Home opens the quick menu; X1 also covers Game Bar's use of the Xbox button).
+  Home: 64 MB working set, 86 MB private, 14 threads, 0 % idle CPU; 17.9 MB after giving
+  memory back; first frame in 84 ms.
+- Unit tests and `cargo clippy --workspace --all-targets`: all PASS, no warnings. The opt-in
+  input tests (`cargo test --bin sofa -- --ignored`): 2 of 2 PASS (everything held for the
+  streaming window; only the keys Sofa reads held while Sofa is in front).
+- Build, install: B1 to B3 PASS. `dist\Sofa-Setup-2.2.0.exe` (2.1 MB, version resource 2.2.0)
+  replaced the installed 2.1.0: Installed apps shows 2.2.0, the Start menu shortcut and the
+  start-with-Windows entry point at the installed file, and Sofa 2.2.0 started from it. B4 not
+  rerun.
+- Manual checks M1 to M24: not walked for this release. The DualSense output reports follow Linux's
+  hid-playstation layout and are unit tested, but were not yet seen on a real controller.
 
 ### 2.1.0 (2026-11-27)
 

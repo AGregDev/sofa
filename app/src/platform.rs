@@ -20,16 +20,33 @@ pub const SOFA_MARK: usize = 0x50FA_50FA;
 
 // ---------- Holding back other programs' synthetic input ----------
 
-static HOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// What is held back: `Hold` as a number (the hooks read it on their own thread).
+static HOLD: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Other programs' synthetic input that is held back.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Hold {
+    Off = 0,
+    /// Only the keys Sofa reads as actions (arrows, Enter, Esc...), while Sofa is in front with
+    /// a pad it reads itself: Steam's desktop layout sends them for the same buttons (Enter for
+    /// ○ acted as ✕). Other keys and clicks pass, so apps that fake a key press to bring their
+    /// window forward (Spotify and other Chromium apps) still can.
+    SofaKeys = 1,
+    /// Every key and click, while a streaming window Sofa opened is in front and the controller
+    /// is its remote.
+    All = 2,
+}
 static HOOK_THREAD: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
 const HOOK_ON: u32 = 0x8000 + 20;
 const HOOK_OFF: u32 = 0x8000 + 21;
 
 unsafe extern "system" fn key_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
-    if code >= 0 && HOLD.load(std::sync::atomic::Ordering::Relaxed) {
+    let hold = HOLD.load(std::sync::atomic::Ordering::Relaxed);
+    if code >= 0 && hold != Hold::Off as u8 {
         // SAFETY: for WH_KEYBOARD_LL, lparam points to a KBDLLHOOKSTRUCT.
         let k = unsafe { &*(l.0 as *const KBDLLHOOKSTRUCT) };
-        if k.flags.contains(LLKHF_INJECTED) && k.dwExtraInfo != SOFA_MARK {
+        let sofa_key = crate::key_action(windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(k.vkCode as u16)).is_some();
+        if k.flags.contains(LLKHF_INJECTED) && k.dwExtraInfo != SOFA_MARK && (hold == Hold::All as u8 || sofa_key) {
             return LRESULT(1);
         }
     }
@@ -38,7 +55,7 @@ unsafe extern "system" fn key_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
 }
 
 unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
-    if code >= 0 && HOLD.load(std::sync::atomic::Ordering::Relaxed) {
+    if code >= 0 && HOLD.load(std::sync::atomic::Ordering::Relaxed) == Hold::All as u8 {
         // SAFETY: for WH_MOUSE_LL, lparam points to a MSLLHOOKSTRUCT.
         let m = unsafe { &*(l.0 as *const MSLLHOOKSTRUCT) };
         if m.flags & LLMHF_INJECTED != 0 && m.dwExtraInfo != SOFA_MARK {
@@ -49,14 +66,17 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
     unsafe { CallNextHookEx(None, code, w, l) }
 }
 
-/// While a streaming window Sofa opened is in front, Sofa is the only thing turning the
-/// controller into input: keys and clicks other programs synthesize (Steam's desktop layout
-/// sends arrows, Space and clicks for the same buttons) are held back. The person's real
-/// keyboard and mouse always pass. The hooks live on their own thread, installed only while
-/// this is on.
-pub fn hold_synthetic_input(on: bool) {
+/// Holds back other programs' synthetic input (`Hold`): Sofa turns the controller into input
+/// itself, so keys other programs make from the same buttons (Steam's desktop layout sends
+/// arrows, Space, Enter and clicks) would act twice or wrongly. The person's real keyboard and
+/// mouse always pass. The hooks live on their own thread, installed only while something is
+/// held.
+pub fn hold_synthetic_input(hold: Hold) {
     use std::sync::atomic::Ordering::Relaxed;
-    if HOLD.swap(on, Relaxed) == on {
+    let before = HOLD.swap(hold as u8, Relaxed);
+    let on = hold != Hold::Off;
+    if (before != Hold::Off as u8) == on {
+        // The hooks are already in place (or already gone): only what they hold changed.
         return;
     }
     let id = match HOOK_THREAD.get() {
@@ -404,7 +424,7 @@ mod tests {
     #[test]
     #[ignore]
     fn held_input_stops_other_programs_keys_but_not_sofas() {
-        hold_synthetic_input(true);
+        hold_synthetic_input(Hold::All);
         std::thread::sleep(Duration::from_millis(300));
         press(false, 0);
         let others = f24_down();
@@ -412,7 +432,7 @@ mod tests {
         press(false, SOFA_MARK);
         let sofas = f24_down();
         press(true, SOFA_MARK);
-        hold_synthetic_input(false);
+        hold_synthetic_input(Hold::Off);
         std::thread::sleep(Duration::from_millis(300));
         press(false, 0);
         let released = f24_down();
@@ -420,5 +440,20 @@ mod tests {
         assert!(!others, "another program's key got through while held");
         assert!(sofas, "Sofa's own key was held back");
         assert!(released, "keys stay held back after the hold ended");
+    }
+
+    /// While Sofa is in front only the keys it reads are held: other programs' other keys pass
+    /// (apps fake key presses to bring their windows forward). Opt-in like the test above.
+    #[test]
+    #[ignore]
+    fn sofa_keys_hold_lets_other_keys_pass() {
+        hold_synthetic_input(Hold::SofaKeys);
+        std::thread::sleep(Duration::from_millis(300));
+        press(false, 0);
+        let passed = f24_down();
+        press(true, 0);
+        hold_synthetic_input(Hold::Off);
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(passed, "a key Sofa does not read was held back");
     }
 }
