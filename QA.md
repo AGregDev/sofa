@@ -157,6 +157,23 @@ These need a person, a TV and a controller.
 
 ## Results
 
+### 2.2.2 (2026-11-27)
+
+- Automated UI run: 73 of 73 PASS. Home: 69 MB working set, 89.3 MB private, 16 threads, 0 %
+  idle CPU; 17.5 MB after giving memory back; first frame in 81 ms.
+- Unit tests and `cargo clippy --workspace --all-targets`: all PASS, no warnings (new: the
+  setup's redirect names the port the sign-in listens on).
+- M21 with a real Spotify app and account: the dashboard refused `http://127.0.0.1` and
+  `http://127.0.0.1/callback` ("This redirect URI is not secure") and took
+  `http://127.0.0.1:7632/callback`. With that registration Sofa 2.2.1 connected while signing
+  in on a random port, so Spotify does not compare a loopback redirect's port. The library
+  loaded: Home's Music row with Liked Songs, 11 covers saved. 2.2.2's own sign-in on 7632 was
+  not repeated. M22 (playback) and the other manual checks: not walked.
+- Build, install: B1 to B3 PASS. `dist\Sofa-Setup-2.2.2.exe` (2.1 MB, version resource 2.2.2)
+  replaced the installed 2.2.1 and kept the Spotify sign-in: Installed apps shows 2.2.2, the
+  Start menu shortcut and the start-with-Windows entry point at the installed file, and Sofa
+  2.2.2 started from it. B4 not rerun.
+
 ### 2.2.1 (2026-11-27)
 
 - Automated UI run: 73 of 73 PASS (new: R4 and R5; QA key presses now end with a key-up, and a

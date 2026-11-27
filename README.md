@@ -91,7 +91,7 @@ off the main thread at the size it is drawn. Checked on every release by an auto
 
 ## Install
 
-1. Download **Sofa-Setup-2.2.1.exe** from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa. It replaces Sofa 1.x and keeps your settings.
+1. Download **Sofa-Setup-2.2.2.exe** from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa. It replaces Sofa 1.x and keeps your settings.
 2. On the first screen, choose whether Sofa starts with Windows and keeps Steam off the PS button (with an Xbox controller: also Game Bar off the Xbox button), then **Continue**.
 3. Steam also listens to the PS button. Sofa turns off Steam's **Guide button focuses Steam** for you: by itself when Steam is closed, or after asking when Steam is open (Steam restarts in the background). You can turn this off in Settings.
 
@@ -138,7 +138,7 @@ cargo build --release
 | `powershell -ExecutionPolicy Bypass -File qa\qa.ps1` | Automated QA: drives every screen, checks memory and CPU, writes `shots\qa.txt` |
 | `sofa.exe --windowed` | Runs in a window instead of full screen (`--log` writes `%TEMP%\sofa-native.log`) |
 
-Copy `sofa.exe` to a name containing "setup" (`Sofa-Setup-2.2.1.exe`) and it installs itself.
+Copy `sofa.exe` to a name containing "setup" (`Sofa-Setup-2.2.2.exe`) and it installs itself.
 
 ## How it works
 

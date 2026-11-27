@@ -5,9 +5,11 @@
 //!
 //! Spotify only lets an app control playback for the people who made it (Development Mode;
 //! since February 2026 the app's owner needs Premium), so each person uses a Spotify app they
-//! made: its Client ID and the redirect `http://127.0.0.1/callback`. The sign-in is PKCE in
-//! the browser, answered on 127.0.0.1 at any port (Spotify allows that for loopback). Sofa never
-//! sees the password and keeps the refresh token encrypted for this Windows account (DPAPI).
+//! made: its Client ID and the redirect `http://127.0.0.1:7632/callback`. The sign-in is PKCE in
+//! the browser, answered on 127.0.0.1 at that port: Spotify's dashboard refuses a loopback
+//! redirect without a port ("not secure"), although its documentation says to register one that
+//! way. Sofa never sees the password and keeps the refresh token encrypted for this Windows
+//! account (DPAPI).
 //!
 //! Everything that talks to Spotify runs on the `spotify` thread: the UI sends a `Req`, reads
 //! the shared `Music` and is woken with `WM_MUSIC`. Settings: `music.spotify` in `sofa.json`
@@ -24,8 +26,11 @@ use std::time::{Duration, Instant};
 
 /// Posted to Sofa's window when `Music` changed.
 pub const WM_MUSIC: u32 = 0x8000 + 15;
+/// The port Sofa answers Spotify's sign-in on (SOFA on a phone keypad), below Windows' range of
+/// temporary ports.
+const PORT: u16 = 7632;
 /// The redirect the person adds to their Spotify app.
-pub const REDIRECT: &str = "http://127.0.0.1/callback";
+pub const REDIRECT: &str = "http://127.0.0.1:7632/callback";
 pub const DASHBOARD: &str = "https://developer.spotify.com/dashboard";
 const SCOPES: &str = "user-read-private user-read-playback-state user-modify-playback-state playlist-read-private playlist-read-collaborative user-library-read";
 const API: &str = "api.spotify.com";
@@ -332,8 +337,12 @@ impl Worker {
         if !client_id_ok(&id) {
             return Err("The Client ID is 32 letters and digits, from your Spotify app's settings.".into());
         }
-        let listener = TcpListener::bind("127.0.0.1:0").map_err(|_| "Sofa couldn't listen for Spotify's answer.".to_owned())?;
+        // The port in the registered redirect. If another program holds it, any free port:
+        // Spotify does not compare a loopback redirect's port (2.2.1 signed in on a random port
+        // against a redirect registered with 7632); only its dashboard insists on one.
+        let listener = TcpListener::bind(("127.0.0.1", PORT)).or_else(|_| TcpListener::bind("127.0.0.1:0")).map_err(|_| "Sofa couldn't listen for Spotify's answer.".to_owned())?;
         let port = listener.local_addr().map_err(|_| "Sofa couldn't listen for Spotify's answer.".to_owned())?.port();
+        crate::log(&format!("spotify sign-in answered on port {port}"));
         let redirect = format!("http://127.0.0.1:{port}/callback");
         let verifier = verifier();
         let state = b64url(&random(12));
@@ -636,6 +645,12 @@ mod tests {
         assert_eq!(v.len(), 64);
         assert!(v.bytes().all(|b| b.is_ascii_alphanumeric() || b"-._~".contains(&b)));
         assert_ne!(v, verifier());
+    }
+
+    #[test]
+    fn redirect_names_the_port_sofa_listens_on() {
+        // The dashboard refuses a loopback redirect without a port.
+        assert_eq!(REDIRECT, format!("http://127.0.0.1:{PORT}/callback"));
     }
 
     #[test]

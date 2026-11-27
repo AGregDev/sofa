@@ -3,15 +3,27 @@
 Where Sofa stands, for the next session. Read [MAP.md](MAP.md) first, then the ADRs it
 points to, then `../../CLAUDE.md`.
 
-## State (2026-11-27, 2.2.1 released)
+## State (2026-11-27, 2.2.2 released)
 
-- Sofa 2.2.1 is the native app only (ADR-008), released from `main` as v2.2.1. It passes the
+- Sofa 2.2.2 is the native app only (ADR-008), released from `main` as v2.2.2. It passes the
   automated QA run (73 checks), `cargo test --workspace` and
-  `cargo clippy --workspace --all-targets` with no warnings. Of the manual checks only M25 was
-  walked (on the TV, for 2.2.1); M1 to M24 were not walked for 2.1.0, 2.2.0 or 2.2.1.
+  `cargo clippy --workspace --all-targets` with no warnings. Of the manual checks only M21
+  (Spotify connect, for 2.2.2) and M25 (on the TV, for 2.2.1) were walked; the others were not
+  walked for 2.1.0 to 2.2.2.
 - It installs itself (`Sofa-Setup-<version>.exe`), replaces Sofa 1.x keeping
   `%APPDATA%\sofa`, and uninstalls from Installed apps (`Sofa.exe --uninstall`).
 - The 1.x features still missing are listed in `../../PRODUCT.md`, "Not yet in 2.x".
+
+## New in 2.2.2
+
+- **Spotify's redirect has a port** (`spotify::REDIRECT`, `PORT`). The dashboard refuses
+  `http://127.0.0.1/callback` ("This redirect URI is not secure"), with or without the path,
+  although Spotify's documentation says to register a loopback redirect without a port. The
+  setup now asks for `http://127.0.0.1:7632/callback`, and the sign-in listens on 7632 (any
+  free port if it is taken). Spotify itself does not compare a loopback redirect's port: 2.2.1
+  signed in on a random port against that registration.
+- Spotify connected with a real account for the first time (M21). Playback from Music (M22) is
+  still untried.
 
 ## New in 2.2.1
 
@@ -46,9 +58,12 @@ points to, then `../../CLAUDE.md`.
   albums from the Web API, played on this PC's Spotify app (`/me/player/play` with this PC's
   Connect device, Spotify started when closed). The person makes a Spotify app (Development
   Mode: the owner needs Premium since February 2026, five users) with the redirect
-  `http://127.0.0.1/callback`; sign-in is PKCE in the browser answered on 127.0.0.1 at any
-  port; the refresh token is sealed with DPAPI in `music.spotify`. Playlists report `items`
-  since February 2026 (`tracks` before): both are read. Not yet tried against a real account.
+  `http://127.0.0.1:7632/callback` (since 2.2.2: the dashboard refuses a loopback redirect
+  without a port, although Spotify's documentation says to register one that way); sign-in is
+  PKCE in the browser answered on 127.0.0.1 at that port (any free port if it is taken); the
+  refresh token is sealed with DPAPI in `music.spotify`. Playlists report `items` since
+  February 2026 (`tracks` before): both are read. Connected with a real account on
+  2026-11-27 (M21); playback (M22) not yet tried.
 - **○ acting as ✕ fixed**: Steam's desktop layout turned ○ into Enter. While Sofa is in front
   with a pad it reads, other programs' synthetic keys that Sofa reads as actions are held back
   (`Hold::SofaKeys`, the same hook as YouTube). Holding every key there made Spotify show
