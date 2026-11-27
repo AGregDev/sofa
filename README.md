@@ -10,14 +10,15 @@ the PS button always takes you home, and Windows stays out of sight until you le
 
 [![Release](https://img.shields.io/github/v/release/AGregDev/sofa?style=flat-square&color=f0a24b&labelColor=1c1a18)](https://github.com/AGregDev/sofa/releases/latest)
 [![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-efe9de?style=flat-square&labelColor=1c1a18)](#install)
-[![QA](https://img.shields.io/badge/QA-49%2F49%20passing-efe9de?style=flat-square&labelColor=1c1a18)](QA.md)
+[![QA](https://img.shields.io/badge/QA-53%2F53%20passing-efe9de?style=flat-square&labelColor=1c1a18)](QA.md)
+[![Memory](https://img.shields.io/badge/memory-~60%20MB-efe9de?style=flat-square&labelColor=1c1a18)](#small-and-fast)
 [![License: MIT](https://img.shields.io/badge/license-MIT-efe9de?style=flat-square&labelColor=1c1a18)](LICENSE)
 
 [**Download for Windows**](https://github.com/AGregDev/sofa/releases/latest) · [Features](#features) · [Controls](#controls) · [Build from source](#build-from-source)
 
 <br>
 
-<img src="docs/demo.webp" width="100%" alt="Moving through Sofa's Home, Games and Media sections with a controller">
+<img src="docs/demo.webp" width="100%" alt="Moving through Sofa's Home, Games and Media sections, search and settings with a controller">
 
 </div>
 
@@ -30,18 +31,21 @@ Sofa is the missing home screen: it starts with Windows, sits in front like a co
 dashboard, and gathers **Steam**, **RecompLauncher** ports, **streaming services** and
 your **Start menu apps** into one calm, fast interface you never need a mouse for.
 
+Sofa 2 is a single native executable, written in Rust with Direct2D. No browser engine,
+no helper processes: about **60 MB of memory** on Home, and almost nothing while you play.
+
 <table>
   <tr>
     <td width="50%"><img src="docs/screenshots/running.jpg" alt="Home with a running game first"><br><b>PS button, anywhere.</b> Sofa comes forward with the game you were playing first, ready to resume, close or force close.</td>
-    <td width="50%"><img src="docs/screenshots/setup.jpg" alt="First-run setup"><br><b>A minute of setup.</b> Controller check, library scan, start with Windows, browser, and the Windows and Steam settings worth changing.</td>
+    <td width="50%"><img src="docs/screenshots/media.jpg" alt="The Media section with streaming services"><br><b>Everything in its place.</b> Games, Media and Apps fill themselves from Steam, RecompLauncher and the Start menu.</td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/search.jpg" alt="Search with the on-screen keyboard"><br><b>Search everything.</b> On-screen keyboard with Paste, results as you type.</td>
-    <td><img src="docs/screenshots/settings.jpg" alt="Settings sheet"><br><b>Settings from the pad.</b> Home button, button layout, browser, controller light, sounds, motion.</td>
+    <td><img src="docs/screenshots/search.jpg" alt="Search with the on-screen keyboard"><br><b>Search everything.</b> On-screen keyboard with Paste, results as you type, or just type on a keyboard.</td>
+    <td><img src="docs/screenshots/settings.jpg" alt="Settings sheet"><br><b>Settings from the pad.</b> Start with Windows, Home button, button layout, Steam, browser, sounds, motion.</td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/discord.jpg" alt="Guided Discord setup"><br><b>Discord voice on the couch.</b> Join channels, mute and deafen from the controller. Guided one-time setup.</td>
-    <td><img src="docs/screenshots/system.jpg" alt="System section"><br><b>Power and system.</b> Sleep, restart, go to the desktop and come back with PS, display and sound.</td>
+    <td><img src="docs/screenshots/welcome.jpg" alt="First start"><br><b>Ready in one screen.</b> Start with Windows, keep Steam off the PS button, pick a button layout.</td>
+    <td><img src="docs/screenshots/system.jpg" alt="System section"><br><b>Power and system.</b> Sleep, restart, go to the desktop and come back with PS, display and sound settings.</td>
   </tr>
 </table>
 
@@ -50,48 +54,42 @@ your **Start menu apps** into one calm, fast interface you never need a mouse fo
 **A console home**
 - Starts with Windows and stays in front: the desktop, taskbar and Start menu never show unless you choose **Go to desktop**. The PS button brings Sofa back.
 - **PS button from any game or app** opens Home with that app first: resume, close or force close. Starting a second game asks first.
-- **Steam stays off the PS button:** Sofa switches off Steam's own PS-button setting for you, so Steam no longer jumps in front.
-- Home rows: Running, Discord voice, Jump back in, Favorites, then Games, Media and Apps, each ending in an "All ..." tile.
+- **Steam stays off the PS button:** Sofa switches off Steam's own PS-button setting for you, and pushes Steam back down if it still grabs the screen.
+- Home rows: Running, Jump back in, Favorites, then Games, Media and Apps, each ending in an "All ..." tile.
+- Interface sounds, a short start-up, notices for controllers connecting and a low battery.
 
 **Your whole library**
 - Steam games with their own art and logos, RecompLauncher ports (Ocarina of Time, Majora's Mask and others), and every Start menu app with its icon.
-- Sorted into Games, Media, Apps and System automatically. Move, rename, hide, favorite or give anything a **custom cover** from your Pictures, Downloads or Desktop.
-- **Uninstall** games and apps from their options.
+- Sorted into Games, Media, Apps and System automatically. Move, rename, hide or favorite anything.
+- Streaming: YouTube in its TV interface, Netflix, Disney+, Prime Video and Twitch full screen in Firefox, Chrome or Edge, each with its own TV profile.
 
 **Made for the DualSense, works with any pad**
-- No drivers: battery and charging in the top bar, lightbar in the selected game's colour, player light, and the **mute button** mutes you in Discord (or the Windows mic) with its LED.
+- No drivers: the DualSense is read directly, over USB or Bluetooth, with its battery and charging in the top bar. Xbox and other XInput pads work too, Guide button included.
 - **Button layouts:** match the controller, PlayStation, Xbox (A B X Y) or Nintendo (confirm and back swapped).
-- **Headphones in the controller take the sound**, like a PS5: plug them into the DualSense and Windows audio and Discord voice move there; unplug and they move back. (Windows only offers the jack over a USB cable.)
-- Sound output switcher for everything else.
+- **Home button:** the PS button, or Create + Options if you would rather leave PS to Steam or the Game Bar.
 
-**Streaming and voice**
-- YouTube in its TV interface inside Sofa. Netflix, Disney+, Prime Video and Twitch full screen in Firefox (Sofa can install it for you), Chrome or Edge, with their own TV sign-ins.
-- **Discord voice:** recent channels on Home, every server's voice channels, mute, deafen, leave.
+### Small and fast
 
-**Calm and quick**
-- Warm graphite, one amber accent, and colour taken from the games themselves.
-- Focus moves take well under a frame, game art decodes off the main thread, and nothing redraws under you while you browse. Checked on every release by an automated [QA run](QA.md).
+| | Sofa 1.3 (Electron) | Sofa 2.0 (native) |
+| --- | --- | --- |
+| Memory on Home | 564 MB, 6 processes | about 60 MB, 1 process |
+| Memory while a game runs | same | about 17 MB (Sofa gives its art back) |
+| Idle CPU | a helper polling every 30 ms | 0 % (it sleeps until something happens) |
+| Download | 122 MB installer, 358 MB installed | 1.8 MB, one file |
+
+Focus moves, scrolling and the hero art run at the display's refresh rate; art is decoded
+off the main thread at the size it is drawn. Checked on every release by an automated
+[QA run](QA.md).
 
 ## Install
 
-1. Download the **Sofa Setup** installer from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa.
-2. Follow the one-minute setup with your controller.
+1. Download **Sofa-Setup-2.0.0.exe** from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa. It replaces Sofa 1.x and keeps your settings.
+2. On the first screen, choose whether Sofa starts with Windows and keeps Steam off the PS button, then **Continue**.
 3. Steam also listens to the PS button. Sofa turns off Steam's **Guide button focuses Steam** for you: by itself when Steam is closed, or after asking when Steam is open (Steam restarts in the background). You can turn this off in Settings.
 
-Windows SmartScreen may warn that the installer is unsigned: choose **More info, Run anyway**.
-
-### Connect Discord (optional)
-
-Discord only lets an app control voice for the people who made it, so you make a
-small Discord application once. Sofa walks you through it in **Social, Connect Discord**:
-
-1. Open the [Discord developer portal](https://discord.com/developers/applications), choose **New Application** and name it Sofa.
-2. In **OAuth2**, add the redirect `http://127.0.0.1` and save.
-3. Copy the **Client ID**, then select step 3 in Sofa: it reads it from the clipboard.
-4. **Reset Secret**, copy it, and select step 4.
-5. Select **Connect** and approve Sofa in Discord.
-
-Sofa keeps the sign-in (encrypted with Windows' data protection), so you do this once.
+Windows SmartScreen may warn that the file is unsigned: choose **More info, Run anyway**.
+To remove Sofa, use **Settings, Apps, Installed apps, Sofa, Uninstall**; your settings stay
+in `%APPDATA%\sofa`.
 
 ## Controls
 
@@ -100,50 +98,53 @@ Sofa keeps the sign-in (encrypted with Windows' data protection), so you do this
 | D-pad, left stick | Move |
 | ✕ | Open, play, select |
 | ○ | Back |
-| △ | Options: favorite, move, rename, cover, uninstall, hide |
+| △ | Options: favorite, move, rename, hide; resume or close a running app |
 | □ | Search |
 | Options | Settings |
 | L1, R1 | Previous, next section |
-| L2, R2 | Volume |
+| L2, R2 | Volume (in the keyboard: Shift and Done) |
 | PS | Home, from anywhere (or Create + Options, if you prefer) |
-| Mute | Mute in Discord voice, or the Windows microphone |
 
 Keyboard: arrows, Enter, Esc, Q and E for sections, M options, F search, O settings,
-Ctrl+V to paste. **Ctrl+Alt+H** brings Sofa to the front from anywhere.
+type to search, Ctrl+V to paste. **Ctrl+Alt+H** brings Sofa to the front from anywhere.
 
 ## Build from source
 
-Needs Windows 10 or 11 and Node.js 20 or newer.
+Needs Windows 10 or 11, Rust (stable, the `x86_64-pc-windows-gnu` toolchain) and MinGW-w64
+binutils on `PATH` (for example [WinLibs](https://winlibs.com), in a folder without spaces).
 
 ```powershell
 git clone https://github.com/AGregDev/sofa.git
 cd sofa
-npm install
-npm start
+$env:CARGO_TARGET_DIR = "$env:LOCALAPPDATA\sofa-build\target"   # keeps build paths short
+cargo build --release
+& "$env:CARGO_TARGET_DIR\release\sofa.exe" --windowed
 ```
 
 | Command | What it does |
 | --- | --- |
-| `npm start` | Run Sofa from source |
-| `npm run qa` | Automated QA: drives every screen with a simulated controller, writes screenshots and `shots/qa.txt` |
-| `npm test` | Tests for the Steam settings editor, on a made-up config |
-| `powershell -ExecutionPolicy Bypass -File scripts\qa-helper.ps1` | Desktop QA for the PS-button helper |
-| `powershell -ExecutionPolicy Bypass -File setup.ps1` | Build the installer and install it (`-BuildOnly` to just build) |
+| `cargo build --release` | Builds `sofa.exe` (the app, its installer and uninstaller in one file) |
+| `cargo test --workspace` | The VDF parser's 172 recorded cases and the Steam settings editor's tests |
+| `powershell -ExecutionPolicy Bypass -File qa\qa.ps1` | Automated QA: drives every screen, checks memory and CPU, writes `shots\qa.txt` |
+| `sofa.exe --windowed` | Runs in a window instead of full screen (`--log` writes `%TEMP%\sofa-native.log`) |
+
+Copy `sofa.exe` to a name containing "setup" (`Sofa-Setup-2.0.0.exe`) and it installs itself.
 
 ## How it works
 
 ```
-Electron main (main.js) ──IPC── UI (renderer/, plain JS + CSS, spatial navigation)
-   │                              │
-   │                              └─ WebHID: DualSense battery, lightbar, mute, buttons
-   ├─ library: Steam manifests and art, RecompLauncher, Start menu (scripts/apps.ps1)
-   ├─ Discord local RPC over a named pipe (src/social.js)
-   └─ padwatch.ps1: joystick PS button, window focus, launcher guard, Steam push-down
+sofa.exe ─ one window, one message loop: draws only while something moves
+   ├─ gfx      Direct2D on a DXGI flip swap chain, DirectWrite (Figtree), WIC decoding thread
+   ├─ input    XInput (Guide via XInputGetStateEx), the DualSense over raw HID on its own thread
+   ├─ shell    foreground events: stays in front, guards the desktop, pushes Steam back
+   ├─ library  Steam manifests and art (crates/vdf), RecompLauncher, the Start menu
+   └─ steam    turns off Steam's PS-button setting in localconfig.vdf, safely (crates/steam)
 ```
 
-- The helper reads the controller through the Windows joystick API, which keeps working while a game has focus, so the PS button reaches Sofa from inside any game.
-- A DualSense on Bluetooth is switched to full reports so Sofa can read its battery; in that mode Sofa reads its buttons over HID itself.
-- Settings, overrides and play history live in `%APPDATA%\sofa\sofa.json`. Secrets are encrypted with `safeStorage`.
+- The DualSense thread keeps reading while a game has focus, so the PS button reaches Sofa from inside any game. Windows tells Sofa when another window comes to the front; there is no polling helper.
+- The Start menu listing and program icons come from a short-lived `sofa.exe --scan` at low priority, so Windows' icon code never stays in Sofa's memory.
+- Settings, overrides and play history live in `%APPDATA%\sofa\sofa.json`, the same file Sofa 1.x used.
+- Sofa 2 was ported from the Electron app with [rust-anything](https://github.com/erkamyaman/rust-anything): the VDF parser is checked against 172 cases recorded from the original. The port's decisions are in [docs/port](docs/port/DECISIONS.md).
 
 More in [PRODUCT.md](PRODUCT.md) (what Sofa promises and why), [CLAUDE.md](CLAUDE.md) (architecture and rules for contributors and coding agents) and [QA.md](QA.md).
 
@@ -152,10 +153,10 @@ More in [PRODUCT.md](PRODUCT.md) (what Sofa promises and why), [CLAUDE.md](CLAUD
 - Icons follow [Lucide](https://lucide.dev) (ISC). Brand marks from [Simple Icons](https://simpleicons.org) (CC0).
 - [Figtree](https://github.com/erikdkennedy/figtree) by Erik Kennedy (SIL Open Font License).
 - Interface direction follows the unslop skill by Damir Sokolovsky ([@heydamir](https://x.com/heydamir)), CC BY 4.0.
-- The setup scene is rendered in Blender from `assets/blender/make_assets.py`.
+- The welcome scene is rendered in Blender from `assets/blender/make_assets.py`.
 
 PlayStation, DualSense and the PlayStation logo are trademarks of Sony Interactive
-Entertainment. Steam is a trademark of Valve. Discord is a trademark of Discord Inc.
+Entertainment. Steam is a trademark of Valve. Xbox is a trademark of Microsoft.
 Sofa is a free, unofficial project and is not affiliated with or endorsed by any of them.
 
 ## License

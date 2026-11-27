@@ -1,6 +1,6 @@
-node_modules/
-dist/
+target/
 shots/
+dist/
 assets/blender/out/
 *.log
 .claude/settings.local.json

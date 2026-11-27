@@ -1,0 +1,16 @@
+[package]
+name = "steam"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+description = "Keeps Steam off the PS button: turns off Steam's \"Guide button focuses Steam\" in each account's localconfig.vdf, safely."
+license = "MIT"
+
+[dependencies]
+vdf = { path = "../vdf" }
+serde_json = { version = "1", features = ["preserve_order"] }
+regex = { version = "1", default-features = false, features = ["std"] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

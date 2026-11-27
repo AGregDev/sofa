@@ -1,0 +1,172 @@
+{"fn":"parseVdf","args":["x"],"ok":{"x":""}}
+{"fn":"parseVdf","args":[[]],"ok":{}}
+{"fn":"parseVdf","args":[{}],"error":"text.slice is not a function"}
+{"fn":"parseVdf","args":[{"a":"b"}],"error":"text.slice is not a function"}
+{"fn":"parseVdf","args":[null],"error":"Cannot read properties of null (reading 'length')"}
+{"fn":"parseVdf","args":[{"a":{"b":"c"}}],"error":"text.slice is not a function"}
+{"fn":"parseVdf","args":[true],"error":"text.slice is not a function"}
+{"fn":"parseVdf","args":[["a",1]],"ok":{"a,1":[]}}
+{"fn":"parseVdf","args":[0],"error":"text.slice is not a function"}
+{"fn":"parseVdf","args":[{"2":4,"10":3,"zebra":1,"apple":2,"é":5,"Apple":6}],"error":"text.slice is not a function"}
+{"fn":"parseVdf","args":[{"n":9007199254740992,"f":1e+21,"t":0.1,"neg":-7}],"error":"text.slice is not a function"}
+{"fn":"parseVdf","args":[[3,1,2]],"ok":{"3,1,2":[]}}
+{"fn":"get","args":["x",{}],"ok":{"$undefined":true}}
+{"fn":"get","args":[[],{"a":"b"}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[{"a":{"b":"c"}},0],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[true,null],"ok":{"$undefined":true}}
+{"fn":"get","args":["x",true],"ok":{"$undefined":true}}
+{"fn":"get","args":[{"a":{"b":"c"}},null],"error":"Cannot read properties of null (reading 'toLowerCase')"}
+{"fn":"get","args":[null,"x"],"ok":{"$undefined":true}}
+{"fn":"get","args":[{},{"a":{"b":"c"}}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[true,{"a":"b"}],"ok":{"$undefined":true}}
+{"fn":"get","args":[{"a":{"b":"c"}},["a",1]],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[{"a":"b"},{}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":["x",["a",1]],"ok":{"$undefined":true}}
+{"fn":"get","args":[["a",1],null],"error":"Cannot read properties of null (reading 'toLowerCase')"}
+{"fn":"get","args":[{"a":{"b":"c"}},{}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[0,[]],"ok":{"$undefined":true}}
+{"fn":"get","args":[null,{"a":{"b":"c"}}],"ok":{"$undefined":true}}
+{"fn":"get","args":[[],{}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[null,{"a":"b"}],"ok":{"$undefined":true}}
+{"fn":"get","args":[0,"x"],"ok":{"$undefined":true}}
+{"fn":"get","args":[true,["a",1]],"ok":{"$undefined":true}}
+{"fn":"get","args":["x","x"],"ok":{"$undefined":true}}
+{"fn":"get","args":[true,[]],"ok":{"$undefined":true}}
+{"fn":"get","args":[null,["a",1]],"ok":{"$undefined":true}}
+{"fn":"get","args":[null,[]],"ok":{"$undefined":true}}
+{"fn":"get","args":[[],{"a":{"b":"c"}}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[{"a":"b"},"x"],"ok":{"$undefined":true}}
+{"fn":"get","args":[["a",1],[]],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[0,{"a":{"b":"c"}}],"ok":{"$undefined":true}}
+{"fn":"get","args":[{},"x"],"ok":{"$undefined":true}}
+{"fn":"get","args":[0,["a",1]],"ok":{"$undefined":true}}
+{"fn":"get","args":[null,0],"ok":{"$undefined":true}}
+{"fn":"get","args":[{},["a",1]],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[["a",1],{}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[["a",1],{"a":"b"}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[[],[]],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[null,true],"ok":{"$undefined":true}}
+{"fn":"get","args":[[],null],"error":"Cannot read properties of null (reading 'toLowerCase')"}
+{"fn":"get","args":[{"a":"b"},null],"error":"Cannot read properties of null (reading 'toLowerCase')"}
+{"fn":"get","args":[{"a":"b"},{"a":{"b":"c"}}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":["x",[]],"ok":{"$undefined":true}}
+{"fn":"get","args":[null,null],"ok":{"$undefined":true}}
+{"fn":"get","args":[{"a":"b"},[]],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[0,null],"ok":{"$undefined":true}}
+{"fn":"get","args":[["a",1],["a",1]],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[0,0],"ok":{"$undefined":true}}
+{"fn":"get","args":[0,{"a":"b"}],"ok":{"$undefined":true}}
+{"fn":"get","args":[{"a":{"b":"c"}},{"a":"b"}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[{"a":{"b":"c"}},true],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[[],0],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[[],["a",1]],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[true,0],"ok":{"$undefined":true}}
+{"fn":"get","args":[{"a":"b"},{"a":"b"}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[["a",1],true],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[true,{}],"ok":{"$undefined":true}}
+{"fn":"get","args":[0,true],"ok":{"$undefined":true}}
+{"fn":"get","args":["x",{"a":{"b":"c"}}],"ok":{"$undefined":true}}
+{"fn":"get","args":[true,{"a":{"b":"c"}}],"ok":{"$undefined":true}}
+{"fn":"get","args":[{},[]],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[{},{}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[{"a":{"b":"c"}},{"a":{"b":"c"}}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[["a",1],0],"ok":"a"}
+{"fn":"get","args":["x",null],"ok":{"$undefined":true}}
+{"fn":"get","args":[[],true],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[{"a":"b"},0],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[0,{}],"ok":{"$undefined":true}}
+{"fn":"get","args":[{"a":{"b":"c"}},[]],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[{"a":"b"},true],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[null,{}],"ok":{"$undefined":true}}
+{"fn":"get","args":[[],"x"],"ok":{"$undefined":true}}
+{"fn":"get","args":["x",{"a":"b"}],"ok":{"$undefined":true}}
+{"fn":"get","args":["x",0],"ok":{"$undefined":true}}
+{"fn":"get","args":[{},null],"error":"Cannot read properties of null (reading 'toLowerCase')"}
+{"fn":"get","args":[{"a":"b"},["a",1]],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[{},true],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[["a",1],"x"],"ok":{"$undefined":true}}
+{"fn":"get","args":[{},{"a":"b"}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[true,true],"ok":{"$undefined":true}}
+{"fn":"get","args":[["a",1],{"a":{"b":"c"}}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[{"a":{"b":"c"}},"x"],"ok":{"$undefined":true}}
+{"fn":"get","args":[true,"x"],"ok":{"$undefined":true}}
+{"fn":"get","args":[{},0],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":["x","X"],"ok":{"$undefined":true}}
+{"fn":"get","args":[{"2":4,"10":3,"zebra":1,"apple":2,"é":5,"Apple":6},{}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[{"n":9007199254740992,"f":1e+21,"t":0.1,"neg":-7},{}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[[3,1,2],{}],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":["x",{"2":4,"10":3,"zebra":1,"apple":2,"é":5,"Apple":6}],"ok":{"$undefined":true}}
+{"fn":"get","args":["x",{"n":9007199254740992,"f":1e+21,"t":0.1,"neg":-7}],"ok":{"$undefined":true}}
+{"fn":"get","args":["x",[3,1,2]],"ok":{"$undefined":true}}
+{"fn":"parseVdf","args":["\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\t\"C:\\\\Program Files (x86)\\\\Steam\"\n\t\t\"label\"\t\t\"\"\n\t\t\"contentid\"\t\t\"1234567890123456789\"\n\t\t\"apps\"\n\t\t{\n\t\t\t\"228980\"\t\t\"512000\"\n\t\t\t\"1174180\"\t\t\"120000000000\"\n\t\t\t\"413150\"\t\t\"620000000\"\n\t\t}\n\t}\n\t\"1\"\n\t{\n\t\t\"path\"\t\t\"D:\\\\Games\\\\SteamLibrary\"\n\t\t\"apps\"\n\t\t{\n\t\t}\n\t}\n}\n"],"ok":{"libraryfolders":{"0":{"path":"C:\\Program Files (x86)\\Steam","label":"","contentid":"1234567890123456789","apps":{"228980":"512000","413150":"620000000","1174180":"120000000000"}},"1":{"path":"D:\\Games\\SteamLibrary","apps":{}}}}}
+{"fn":"parseVdf","args":["\"AppState\"\n{\n\t\"appid\"\t\t\"1174180\"\n\t\"name\"\t\t\"Red Dead Redemption 2\"\n\t\"StateFlags\"\t\t\"4\"\n\t\"installdir\"\t\t\"Red Dead Redemption 2\"\n\t\"LastPlayed\"\t\t\"1764200000\"\n\t\"UserConfig\"\n\t{\n\t\t\"language\"\t\t\"english\"\n\t}\n\t\"InstalledDepots\"\n\t{\n\t\t\"1174181\"\n\t\t{\n\t\t\t\"manifest\"\t\t\"7351839152397463918\"\n\t\t\t\"size\"\t\t\"121000000000\"\n\t\t}\n\t}\n}\n"],"ok":{"AppState":{"appid":"1174180","name":"Red Dead Redemption 2","StateFlags":"4","installdir":"Red Dead Redemption 2","LastPlayed":"1764200000","UserConfig":{"language":"english"},"InstalledDepots":{"1174181":{"manifest":"7351839152397463918","size":"121000000000"}}}}}
+{"fn":"parseVdf","args":["\"users\"\n{\n\t\"76561198000000002\"\n\t{\n\t\t\"AccountName\"\t\t\"player_two\"\n\t\t\"PersonaName\"\t\t\"Player Two\"\n\t\t\"MostRecent\"\t\t\"0\"\n\t}\n\t\"76561198000000001\"\n\t{\n\t\t\"AccountName\"\t\t\"player_one\"\n\t\t\"PersonaName\"\t\t\"Ünïcödé 名前 🎮\"\n\t\t\"MostRecent\"\t\t\"1\"\n\t}\n}\n"],"ok":{"users":{"76561198000000002":{"AccountName":"player_two","PersonaName":"Player Two","MostRecent":"0"},"76561198000000001":{"AccountName":"player_one","PersonaName":"Ünïcödé 名前 🎮","MostRecent":"1"}}}}
+{"fn":"parseVdf","args":["\"UserLocalConfigStore\"\r\n{\r\n\t// a comment line\r\n\t\"friends\"\r\n\t{\r\n\t\t\"Notes\"\t\t\"say \\\"hi\\\" \\\\ then\\nnew line\\tand tab\"\r\n\t\t\"PersonaName\"\t\t\"Player\"\r\n\t}\r\n\t\"ControllerTypesUsed\"\t\t\"controller_ps5,controller_xboxone,\"\r\n\t\"Controller_CheckGuideButton\"\t\t\"0\"\r\n}\r\n"],"ok":{"UserLocalConfigStore":{"friends":{"Notes":"say \"hi\" \\ then\nnew line\tand tab","PersonaName":"Player"},"ControllerTypesUsed":"controller_ps5,controller_xboxone,","Controller_CheckGuideButton":"0"}}}
+{"fn":"parseVdf","args":["\"root\"\n{\n\t\"zebra\" \"1\"\n\t\"10\" \"ten\"\n\t\"2\" \"two\"\n\t\"01\" \"leading zero\"\n\t\"-1\" \"negative\"\n\t\"4294967294\" \"largest index\"\n\t\"4294967295\" \"not an index\"\n\t\"apple\" \"2\"\n\t\"0\" \"zero\"\n}"],"ok":{"root":{"0":"zero","2":"two","10":"ten","4294967294":"largest index","zebra":"1","01":"leading zero","-1":"negative","4294967295":"not an index","apple":"2"}}}
+{"fn":"parseVdf","args":["\"a\" \"first\"\n\"b\" \"keep\"\n\"a\" \"second\"\n\"c\" { \"x\" \"1\" }\n\"c\" { \"y\" \"2\" }"],"ok":{"a":"second","b":"keep","c":{"y":"2"}}}
+{"fn":"parseVdf","args":["\"__proto__\" \"ignored\"\n\"constructor\" \"own\"\n\"toString\" \"also own\"\n\"__proto__\" { \"x\" \"1\" }\n\"after\" \"yes\""],"ok":{"constructor":"own","toString":"also own","after":"yes"}}
+{"fn":"parseVdf","args":["key value\nnested { inner thing other \"quoted value\" }\nlast token"],"ok":{"key":"value","nested":{"inner":"thing","other":"quoted value"},"last":"token"}}
+{"fn":"parseVdf","args":[""],"ok":{}}
+{"fn":"parseVdf","args":["   "],"ok":{}}
+{"fn":"parseVdf","args":["// only a comment"],"ok":{}}
+{"fn":"parseVdf","args":["/"],"ok":{"/":""}}
+{"fn":"parseVdf","args":["//"],"ok":{}}
+{"fn":"parseVdf","args":["\""],"ok":{"":""}}
+{"fn":"parseVdf","args":["\"abc"],"ok":{"abc":""}}
+{"fn":"parseVdf","args":["\"abc\\\""],"ok":{"abc\"":""}}
+{"fn":"parseVdf","args":["\"key\" \"value\\"],"ok":{"key":"value\\"}}
+{"fn":"parseVdf","args":["a\\"],"ok":{"a\\":""}}
+{"fn":"parseVdf","args":["{"],"ok":{"":{}}}
+{"fn":"parseVdf","args":["}"],"ok":{}}
+{"fn":"parseVdf","args":["}}{"],"ok":{}}
+{"fn":"parseVdf","args":["{{}}"],"ok":{"":{"":{}}}}
+{"fn":"parseVdf","args":["\"k\" {"],"ok":{"k":{}}}
+{"fn":"parseVdf","args":["\"k\" { \"a\" \"1\""],"ok":{"k":{"a":"1"}}}
+{"fn":"parseVdf","args":["\"k\" \"v\" } \"after\" \"x\""],"ok":{"k":"v"}}
+{"fn":"parseVdf","args":["\"x\""],"ok":{"x":""}}
+{"fn":"parseVdf","args":["x"],"ok":{"x":""}}
+{"fn":"parseVdf","args":["\"\" \"\""],"ok":{"":""}}
+{"fn":"parseVdf","args":["\"\" { }"],"ok":{"":{}}}
+{"fn":"parseVdf","args":["\"emoji 🎮\" \"値 ✓\""],"ok":{"emoji 🎮":"値 ✓"}}
+{"fn":"parseVdf","args":["\"İstanbul\" \"Ǆ\""],"ok":{"İstanbul":"Ǆ"}}
+{"fn":"parseVdf","args":["\"ΣΑΣ\" \"x\""],"ok":{"ΣΑΣ":"x"}}
+{"fn":"parseVdf","args":["\"a\tb\" \"c d\""],"ok":{"a\tb":"c d"}}
+{"fn":"parseVdf","args":["\"tab\\tkey\" \"new\\nline\""],"ok":{"tab\tkey":"new\nline"}}
+{"fn":"parseVdf","args":["\"key\"//comment\n\"value\""],"ok":{"key":"value"}}
+{"fn":"parseVdf","args":["\"key\" // comment\n{ \"a\" \"b\" }"],"ok":{"key":{"a":"b"}}}
+{"fn":"parseVdf","args":["a{b}c"],"ok":{"a":{"b":""},"c":""}}
+{"fn":"parseVdf","args":["a\"b\"c"],"ok":{"a":"b","c":""}}
+{"fn":"parseVdf","args":["\"q\"x\"r\""],"ok":{"q":"x","r":""}}
+{"fn":"parseVdf","args":["\"a\"\r\n\"b\"\r\n\"c\"\r\n{\r\n\"d\"\r\n\"e\"\r\n}"],"ok":{"a":"b","c":{"d":"e"}}}
+{"fn":"parseVdf","args":["\t\t\"deep\"\n{\n\"1\"\n{\n\"2\"\n{\n\"3\" \"bottom\"\n}\n}\n}"],"ok":{"deep":{"1":{"2":{"3":"bottom"}}}}}
+{"fn":"parseVdf","args":["\"\\u00e9\" \"escaped u is not decoded\""],"ok":{"u00e9":"escaped u is not decoded"}}
+{"fn":"parseVdf","args":[{"$utf16":[34,111,107,34,32,34,108,111,110,101,32,55296,32,115,117,114,114,111,103,97,116,101,34]}],"ok":{"ok":{"$utf16":[108,111,110,101,32,55296,32,115,117,114,114,111,103,97,116,101]}}}
+{"fn":"get","args":[{"users":{"a":1}},"users"],"ok":{"a":1}}
+{"fn":"get","args":[{"Users":{"a":1}},"users"],"ok":{"a":1}}
+{"fn":"get","args":[{"users":1,"USERS":2},"Users"],"ok":1}
+{"fn":"get","args":[{"MostRecent":"1"},"mostrecent"],"ok":"1"}
+{"fn":"get","args":[{"mostrecent":"0","MostRecent":"1"},"MOSTRECENT"],"ok":"0"}
+{"fn":"get","args":[{"2":"two","10":"ten","b":"b","B":"B"},"B"],"ok":"B"}
+{"fn":"get","args":[{"ÄPPS":"x"},"äpps"],"ok":"x"}
+{"fn":"get","args":[{"İ":"dot"},"i̇"],"ok":"dot"}
+{"fn":"get","args":[{"ΣΑΣ":"sigma"},"σας"],"ok":"sigma"}
+{"fn":"get","args":[{"key":"v"},"KEY"],"ok":"v"}
+{"fn":"get","args":[{"key":"v"},""],"ok":{"$undefined":true}}
+{"fn":"get","args":[{"":"empty"},""],"ok":"empty"}
+{"fn":"get","args":[{"0":"zero"},0],"ok":"zero"}
+{"fn":"get","args":[{"0":"zero"},"0"],"ok":"zero"}
+{"fn":"get","args":[["a","b","c"],1],"ok":"b"}
+{"fn":"get","args":[["a","b"],"1"],"ok":"b"}
+{"fn":"get","args":[["a","b"],"length"],"ok":2}
+{"fn":"get","args":[["a","b"],5],"error":"key.toLowerCase is not a function"}
+{"fn":"get","args":[{"a":{"b":"c"}},"A"],"ok":{"b":"c"}}
+{"fn":"get","args":[{"libraryfolders":{"0":{"path":"C:"}}},"LibraryFolders"],"ok":{"0":{"path":"C:"}}}
+{"fn":"get","args":[{"true":"t"},true],"ok":"t"}
+{"fn":"get","args":[{"null":"n"},null],"ok":"n"}
+{"fn":"get","args":[{"a,b":"joined"},["a","b"]],"ok":"joined"}
+{"fn":"get","args":[{"1.5":"float"},1.5],"ok":"float"}
+{"fn":"get","args":[{},"missing"],"ok":{"$undefined":true}}
+{"fn":"get","args":[[],"missing"],"ok":{"$undefined":true}}
+{"fn":"get","args":["string","length"],"ok":{"$undefined":true}}
+{"fn":"get","args":[false,"x"],"ok":{"$undefined":true}}
+{"fn":"get","args":[1,"x"],"ok":{"$undefined":true}}

@@ -4,139 +4,140 @@ A release ships only when every automated check passes and the manual checks
 have been walked on real hardware. Results for each release are recorded at the
 bottom.
 
-## 1. Automated UI run: `npm run qa`
+## 1. Automated UI run: `qa\qa.ps1`
 
-Drives the real app with a simulated DualSense and keyboard from a clean profile.
-Writes `shots/qa.txt` and a screenshot per screen. Never launches, opens or
-uninstalls anything, and never talks to Discord.
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File qa\qa.ps1
+```
 
-| ID | Check |
-| --- | --- |
-| S1 | First run opens setup |
-| S2 | On the controller check, tapping ✕ and ○ only lights them |
-| S3 | Holding ✕ moves on |
-| S4 | Setup offers to turn off Steam's "Guide button focuses Steam" itself |
-| S5 | Finishing setup shows Home |
-| H1 | Tabs are Home, Games, Media, Apps, Social, System (no Phone, no Steam friends) |
-| H2 | Home rows stay short (15 tiles at most) |
-| H3 | A tile has focus and the hero shows its name |
-| H4 | The "All ..." tile opens its section |
-| P1 | Each focus move is handled in under 16 ms |
-| P2 | No main-thread task over 100 ms while browsing |
-| R1 | PS from a game puts it first on Home, focused |
-| R2 | △ on it offers Resume, Close, Force close |
-| R3 | Starting another game asks about the running one |
-| T1 | Settings has Go to desktop, Quit Sofa, Button layout and Keep Steam off the PS button |
-| T2 | A library refresh under an open menu keeps its focus (✕ still works) |
-| D1 | Social offers Connect Discord and nothing from Steam |
-| D2 | Discord setup shows five numbered steps |
-| D3 | The Client ID is picked up from the clipboard |
-| Y1 | System has Go to desktop and Quit Sofa |
-| L1 | Nintendo layout labels confirm as A |
-| L2 | Xbox layout labels confirm as A |
-| I1 | △ opens the item menu |
-| I2 | Change cover opens the picture picker |
-| K1 | The on-screen Paste key types the clipboard |
-| K2 | Ctrl+V pastes into the keyboard |
-| K3 | Typing in search finds library items |
-| A1 | Headphones on a Bluetooth controller explain that the jack needs USB |
-| A2 | Headphones on a USB controller move the sound there (simulated) |
-| A3 | Unplugging gives the sound back (simulated) |
-| V1 | When Steam grabs the PS button, Sofa offers to fix it |
-| V2 | Fixing it reports that Steam no longer takes the PS button (simulated) |
-| N1 | A press that arrives as both pad and key (Steam desktop layout) moves once |
-| E1 | No errors in the console |
-
-## 1b. Steam settings editor: `npm test`
-
-`src/steamguide.js` edits Steam's own config, so it has its own tests. They run on a
-made-up `localconfig.vdf` in a temp folder, never on a real Steam install.
+Starts the release build with `--qa --size 1600x900`: its own data folder in
+`%TEMP%\sofa-qa`, nothing launched, closed, installed or changed outside that folder,
+no foreground hook, no topmost window. Drives it with posted keys, reads the state
+line the app logs after every action, saves a screenshot per screen to `shots\` and
+writes `shots\qa.txt`. Exit code 0 means every check passed.
 
 | ID | Check |
 | --- | --- |
-| G1 | A file without the key reads as Steam's default (on) |
-| G2 | Turning it off adds the key with 0 |
-| G3 | Adding the key changes nothing else in the file |
-| G4 | A file with the setting on reads 1 |
-| G5 | Turning it off replaces only the value |
-| G6 | Windows line endings are kept |
-| G7 | A file it cannot verify is refused |
-| G8 | Status finds the account with the setting on |
-| G9 | With Steam open and no permission to restart it, nothing changes |
-| G10 | With Steam closed, the fix writes the file |
-| G11 | The original file is kept as a backup |
-| G12 | No temp file is left behind |
-| G13 | Running it again changes nothing |
-| G14 | Status then reports it off |
-| G15 | A missing Steam is reported, not guessed |
+| S1 | Starts and opens its window |
+| S2 | First frame in under 1.5 s |
+| W1 | First run shows the welcome screen, focus on Continue |
+| W2 | The welcome screen's button layout cycles (and is saved) |
+| W3 | Continue opens Home with the "Sofa is ready" notice |
+| W4 | Setup is saved |
+| L1 | The Start menu scan runs in the background and writes `startmenu.json` |
+| L2 | The scan helper process exits when done |
+| H1 | Home has rows and the library |
+| H2 | Right moves along the row |
+| H3 | Down moves to the next row |
+| H4 | Home goes back to the first tile |
+| T1 | R1 walks the tabs and wraps (Games, Media, Apps, System, Home) |
+| T2 | L1 goes back a tab |
+| T3 | Back returns to Home |
+| C1 | Options opens Settings |
+| C2 | Focus moves down the list |
+| C3, C4 | Reduce motion switches on and off (saved) |
+| C5 | Show hidden apps switches on |
+| C6, C7 | Home button: Create + Options, then PS again (saved) |
+| C8 | Back closes Settings |
+| K1 | Square opens search |
+| K2 | Typing finds games and apps |
+| K3 | Backspace deletes |
+| K4 | On-screen keys type |
+| K5 | Back closes the keyboard |
+| I1 | Triangle opens the item menu |
+| I2, I3 | Add to favorites, remove from favorites (saved) |
+| I4 | Rename opens the keyboard with the name |
+| I5 | Rename saves the name |
+| I6 | An empty name brings the original back |
+| G1 | Select shows the launch screen (nothing starts in QA) |
+| G2 | Back leaves the launch screen |
+| G3 | Launching records Jump back in |
+| R1 | PS from an app adds a Running card, first and focused |
+| R2 | Triangle on Running opens its menu (Resume, Close, Force close) |
+| R3 | A closed app loses its card |
+| O1 | A second start hands over to the first and exits |
+| P1 | Memory on Home under 150 MB |
+| P2 | Idle CPU under 1 % of a core |
+| P3 | Threads stay few (24 at most) |
+| P4 | Memory is given back in the background |
+| P5 | Draws again after giving memory back |
+| Q1 | Quit Sofa is the last setting |
+| Q2 | Quit Sofa closes it |
+| Q3 | No welcome once set up |
+| Q4 | Settings were kept |
+| Q5 | Closing the window quits |
+| X1 | QA touched nothing outside its folder (real settings, start with Windows, Steam's setting, shortcut, Installed apps) |
+| X2 | No errors in the log |
 
-## 2. Helper on the desktop: `scripts\qa-helper.ps1`
+## 2. Unit tests: `cargo test --workspace`
 
-Close Sofa first. Opens two test windows (one stands in for Sofa, one for a game)
-and drives `padwatch.ps1` like Sofa does.
+| Crate | What it checks |
+| --- | --- |
+| `crates/vdf` | The Rust VDF parser against 172 cases recorded from the original JavaScript (`tests/cases.jsonl`) |
+| `crates/steam` | G1 to G15: the Steam settings editor, on a made-up `localconfig.vdf` in a temp folder, never a real Steam install |
+
+G1 to G15: a file without the key reads as on; turning it off adds the key with 0 and
+changes nothing else; a file with the setting on reads 1; turning it off replaces only
+the value; Windows line endings are kept; a file it cannot verify is refused; status
+finds the account with the setting on; with Steam open and no permission to restart
+it, nothing changes; with Steam closed the fix writes the file; the original is kept as
+a backup; no temp file is left behind; running it again changes nothing; status then
+reports it off; a missing Steam is reported, not guessed.
+
+## 3. Build, install, uninstall
 
 | ID | Check |
 | --- | --- |
-| W1 | The helper starts and says ready |
-| W2 | Home from a game brings Sofa forward and reports the game |
-| W3 | Alive reports the open game window |
-| W4 | Close closes the game, and alive stops reporting it |
-| W5 | Focus brings the game back to the front (Resume) |
+| B1 | `cargo build --release` builds `sofa.exe` with its icon and version |
+| B2 | Run as `Sofa-Setup-<version>.exe`, it installs per user without admin, replaces Sofa 1.x (keeping `%APPDATA%\sofa`) and starts Sofa |
+| B3 | Installed apps lists Sofa with its version; the Start menu has Sofa; start with Windows points at the installed file |
+| B4 | `Sofa.exe --uninstall --quiet` removes the program, shortcut, start with Windows and the Installed apps entry, and keeps the settings |
 
-W2 and W5 need an active, unlocked desktop. With the screen off Windows gives no
-window the focus, so they report SKIP rather than a result.
+## 4. On the desktop, with the installed app
 
-## 3. Build and install
+Needs an unlocked desktop. A stand-in window plays the game.
 
 | ID | Check |
 | --- | --- |
-| B1 | `setup.ps1 -BuildOnly` produces `dist\Sofa Setup <version>.exe` |
-| B2 | The installer installs per-user without admin and starts Sofa |
-| B3 | The installed Sofa and its helper are running 20 seconds later |
+| D1 | PS (from the controller thread) while another app is in front brings Sofa forward with that app first |
+| D2 | Resume puts the app back in front and Sofa no longer covers it |
+| D3 | Showing the desktop brings Sofa back within a second |
+| D4 | Go to desktop lets the desktop stay; PS brings Sofa back |
 
-## 4. Manual, on real hardware
+## 5. Manual, on real hardware
 
 These need a person, a TV and a controller.
 
 | ID | Check |
 | --- | --- |
 | M1 | PS button from a running game opens Sofa with the game first; ✕ resumes it |
-| M2 | With Steam's "Guide button focuses Steam" on, PS shows Sofa's one-time Steam tip and Steam does not stay in front |
+| M2 | With Steam's "Guide button focuses Steam" on, PS shows Sofa's one-time Steam notice and Steam does not stay in front |
 | M3 | With that setting off, PS opens Sofa with no flicker |
 | M4 | Go to desktop shows Windows; PS brings Sofa back |
-| M5 | Discord: Connect once, restart Sofa; voice channels appear with no new Authorize prompt |
-| M6 | Discord: join a recent channel from Home; mute with the controller's mute button and its LED follows |
-| M7 | Battery level and charging show in the top bar; lightbar follows the selected game |
-| M8 | Xbox controller: A selects, B goes back; Nintendo layout swaps them |
-| M9 | Netflix opens full screen in the chosen browser; YouTube opens in its TV interface; hold ○ leaves |
-| M10 | Uninstall a Start menu app from its options; it disappears after the uninstaller finishes |
-| M11 | Moving quickly across a long row stays smooth on the TV |
-| M12 | Controller on USB: plugging headphones into it moves Windows sound and Discord voice there; unplugging moves both back |
-| M13 | Controller on Bluetooth: plugging headphones in shows the USB cable notice |
-| M14 | With Steam's "Guide button focuses Steam" on and Steam open: Fix it now restarts Steam in the background, and the PS button no longer brings Steam forward |
-| M15 | With that setting on and Steam closed: starting Sofa turns it off and says so |
+| M5 | Battery level and charging show in the top bar; a low battery shows a notice |
+| M6 | Xbox controller: A selects, B goes back, Guide goes home; Nintendo layout swaps A and B |
+| M7 | Netflix opens full screen in the chosen browser; YouTube opens in its TV interface |
+| M8 | Moving quickly across a long row stays smooth on the TV |
+| M9 | With Steam's setting on and Steam open: Fix it now restarts Steam in the background, and the PS button no longer brings Steam forward |
+| M10 | With that setting on and Steam closed: starting Sofa turns it off and says so |
+| M11 | A game that exits on its own brings Sofa back with nothing in Running |
+| M12 | Sleep from System, wake the PC: Sofa is in front and draws |
 
 ## Results
 
-### 1.3.0
+### 2.0.0
 
-- Automated UI run: 34 of 34 PASS.
-- Steam settings editor (`npm test`): 15 of 15 PASS.
-- Helper: 5 of 5 PASS (W1 to W5, on the live desktop).
-- Build and install: B1, B2 and B3 PASS. Sofa and its helper were running 25 seconds after install. Steam's `localconfig.vdf` was byte-for-byte unchanged and no backup was written, which is correct because the setting was already off.
-- On this PC Steam's setting was already off. The helper log shows no Steam focus grabs on any PS press since 23:03, against one on every press before 22:34. M14 and M15 (the Steam restart and the change at Sofa start) have not run on real hardware.
+- Automated UI run: 53 of 53 PASS. Home: 62 MB working set, 84 MB private, 17 threads, 0.3 % idle CPU; 17 MB working set after giving memory back; first frame in 80 ms.
+- Unit tests: VDF 172 of 172 recorded cases, Steam G1 to G15, all PASS. `cargo clippy --workspace --all-targets`: no warnings.
+- Build, install, uninstall: B1 to B4 PASS on the development PC. The setup replaced the installed Electron 1.3.0 in under 7 seconds: its processes, its Installed apps entry and its start-with-Windows entry were gone, `sofa.json` was unchanged, and Sofa 2.0.0 was running at 54 MB. `--uninstall --quiet` removed the program folder, shortcut, start-with-Windows and Installed apps entries and kept the settings; Sofa was then installed again.
+- Desktop checks D1 to D4: not run. The PC was on its screen saver during the release run (input desktop "Screen-saver"), where no window can take the focus. Found and fixed on the way: with no window in front, Sofa now takes the focus back itself (with a 5 s back-off).
+- Manual: not yet walked for 2.0.0.
 
-### 1.2.0
+### 1.3.0 (Electron)
 
-- Automated UI run: 32 of 32 PASS. T2 was confirmed to fail on the previous code.
-- Helper: 5 of 5 PASS (W1 to W5, on the live desktop).
-- Build and install: B1, B2, B3 PASS. The installer was built and installed, and Sofa and its helper were running 20 seconds later.
-- Manual: M1 to M13 not yet walked for 1.2.0. The controller under test was on Bluetooth, so M12 needs a USB cable.
+- Automated UI run: 34 of 34 PASS. Steam settings editor: 15 of 15 PASS. Helper: 5 of 5 PASS.
+- Build and install: B1, B2 and B3 PASS.
 
-### 1.1.0
+### 1.2.0 and 1.1.0 (Electron)
 
-- Automated UI run: 28 of 28 PASS.
-- Helper: W1, W3, W4 PASS; W2 and W5 SKIP (run with the display off: no window
-  could take focus). They passed in daily use before this release (helper log).
-- Build and install: see the release notes.
-- Manual: not yet walked for 1.1.0.
+- Automated UI runs: 32 of 32 and 28 of 28 PASS. See the git history of this file for details.

@@ -1,0 +1,15 @@
+[package]
+name = "vdf"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+description = "Valve KeyValues (.vdf / .acf) parsing for Sofa. Ported from Sofa 1.x's src/vdf.js with rust-anything and proven on 172 recorded cases (tests/replay.rs)."
+license = "MIT"
+
+[dependencies]
+serde = "1"
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip", "unbounded_depth"] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
