@@ -2928,8 +2928,14 @@ impl App {
         self.perf_at = if video && usage.gpus.is_none() { now - 800.0 } else { now };
         self.perf = Some(usage);
         let opts = self.perf_opts(now);
-        let mut shown: String = opts.iter().filter_map(|o| o.value.as_deref()).collect::<Vec<_>>().join("|");
-        shown.push_str(&self.perf_card());
+        // What is on screen: the quick menu's card, and the panel's or the overlay's numbers.
+        let mut shown = self.perf_card();
+        if video {
+            for value in opts.iter().filter_map(|o| o.value.as_deref()) {
+                shown.push('|');
+                shown.push_str(value);
+            }
+        }
         if !force && shown == self.perf_shown {
             return;
         }
