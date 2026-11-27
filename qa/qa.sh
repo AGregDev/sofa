@@ -95,7 +95,7 @@ BEFORE=$(fingerprint)
 rm -rf "$QA"
 : > "$OUT/stderr.txt"
 
-# A few made-up desktop entries, so the library has a game, a player and an app to sort and
+# A few made-up desktop entries, so the library has games, a player and an app to sort and
 # search even on a bare system (a CI container), and an SVG icon to draw. They live in the QA
 # folder and reach Sofa only through this run's XDG_DATA_DIRS.
 FIX="$QA/xdg"
@@ -103,6 +103,8 @@ mkdir -p "$FIX/applications" "$FIX/icons/hicolor/scalable/apps"
 printf '%s\n' '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="4" y="4" width="56" height="56" rx="14" fill="#f0a24b"/><circle cx="32" cy="32" r="13" fill="#1c1a18"/></svg>' > "$FIX/icons/hicolor/scalable/apps/qa-sofa-test.svg"
 entry() { printf '[Desktop Entry]\nType=Application\nName=%s\nExec=true\nIcon=qa-sofa-test\nCategories=%s\n' "$2" "$3" > "$FIX/applications/$1.desktop"; }
 entry qa-racer 'Arcade Racer' 'Game;ArcadeGame;'
+entry qa-tower 'Puzzle Tower' 'Game;LogicGame;'
+entry qa-kart 'Kart Party' 'Game;'
 entry qa-player 'Video Player' 'AudioVideo;Player;'
 entry qa-notes 'Notes' 'Utility;'
 export XDG_DATA_DIRS="$FIX:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"

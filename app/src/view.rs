@@ -102,7 +102,7 @@ impl App {
             if u.ram_total > 0 {
                 lines.push(("Memory".into(), crate::perf::of(u.ram_used, u.ram_total)));
             }
-            for g in u.gpus.iter().take(2) {
+            for g in u.gpus.iter().flatten().take(2) {
                 lines.push(("Video memory".into(), g.used.map_or_else(|| format!("{} in all", crate::perf::gb(g.total)), |used| crate::perf::of(used, g.total))));
             }
             lines.push(("Sofa's memory".into(), crate::perf::mb(u.sofa)));

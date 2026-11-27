@@ -3,32 +3,51 @@
 Where Sofa stands, for the next session. Read [MAP.md](MAP.md) first, then the ADRs it
 points to, then `../../CLAUDE.md`.
 
-## State (2026-11-27, 2.2.2 released)
+## State (2026-11-28, 2.3.0 released)
 
-- Sofa 2.2.2 is the native app only (ADR-008), released from `main` as v2.2.2. It passes the
-  automated QA run (73 checks), `cargo test --workspace` and
+- Sofa 2.3.0 is the native app (ADR-008) for Windows and, new, Linux (ADR-010), released from
+  `main` as v2.3.0 with `Sofa-Setup-2.3.0.exe` and `Sofa-Setup-2.3.0-x86_64.AppImage`. It
+  passes the automated QA run (76 checks) on both, `cargo test --workspace` and
   `cargo clippy --workspace --all-targets` with no warnings. Of the manual checks only M21
-  (Spotify connect, for 2.2.2) and M25 (on the TV, for 2.2.1) were walked; the others were not
-  walked for 2.1.0 to 2.2.2.
+  (Spotify connect, for 2.2.2) and M25 (on the TV, for 2.2.1) were walked; none on Linux
+  hardware.
+- Only the latest release is supported: the GitHub releases before 2.3.0 say they are
+  deprecated, and the README's "Versions" says the same.
 - It installs itself (`Sofa-Setup-<version>.exe`), replaces Sofa 1.x keeping
   `%APPDATA%\sofa`, and uninstalls from Installed apps (`Sofa.exe --uninstall`).
 - The 1.x features still missing are listed in `../../PRODUCT.md`, "Not yet in 2.x".
 
-## Linux (branch `linux-appimage`, not released yet)
+## Linux (new in 2.3.0)
 
 - Sofa builds and runs on Linux (ADR-010): an X11 window (XWayland under Wayland) drawn with
   tiny-skia and swash, evdev pads (the PS button works over a game), the DualSense over hidraw
   for lights and mute, EWMH for focus, Running windows and the Steam push-down, desktop entries
   for apps, MPRIS, `pactl`, Discord's socket, rustls, sealed secrets. The Windows build is as it
-  was (73 of 73 QA, clippy clean). Platform code lives in `app/src/linux/`; see CLAUDE.md.
+  was before (the same QA run, clippy clean). Platform code lives in `app/src/linux/`; see CLAUDE.md.
 - CI (`.github/workflows/linux.yml`) builds on Ubuntu 20.04, runs clippy, the tests and the
-  Linux QA run (`qa/qa.sh`, the same 73 checks) under Xvfb, packs
+  Linux QA run (`qa/qa.sh`, the same 76 checks) under Xvfb, packs
   `Sofa-Setup-<version>-x86_64.AppImage`, and attaches it to a published release.
 - Not tried on Linux hardware: controllers, PS over a game on GNOME Wayland, Xorg and KDE, the
-  lights, launching, sound, sleep (QA.md, LB2 to LB6 and LM1 to LM17).
+  lights, launching, sound, sleep (QA.md, LB2 to LB6 and LM1 to LM18).
 - Gaps, in PRODUCT.md "Linux (2.3)": Wayland-native windows are invisible (a GNOME Shell
   extension is the fix), the guard sees only desktop and panel windows, no Ctrl+Alt+H, no
   gamescope, CPU drawing at 4K.
+
+## New in 2.3.0
+
+- **Linux**, above.
+- **Performance** (`perf.rs`, `Ctl::Perf`, `SheetKind::Perf`, `view.rs` `draw_perf`): in the
+  quick menu, the memory in use, each card's video memory, Sofa's own memory and its frame rate
+  (`perf::Frames`: frames drawn in the last second and the time each took to draw). Show on
+  screen (`perfOverlay`) keeps them in an overlay, top left. Read once a second and only while
+  shown; the quick menu's card reads memory alone, and the screen is drawn again only when a
+  number on it changed. Video memory: DXGI's adapters and PDH's `\GPU Adapter
+  Memory(*)\Dedicated Usage`, matched by LUID, on Windows; NVML and amdgpu's
+  `mem_info_vram_*` on Linux. Both are opened once on the short-lived `perf` thread (adding the
+  PDH counter takes about 120 ms; a read after that, 30 µs). QA U14 to U16.
+- **Builds**: the release profile already had LTO, one code unit, `panic = "abort"` and
+  stripped symbols; Linux builds also target x86-64-v2 (`.cargo/config.toml`).
+- README: installing on Linux, connecting Discord and Spotify step by step, and "Versions".
 
 ## New in 2.2.2
 
@@ -111,7 +130,7 @@ points to, then `../../CLAUDE.md`.
 
 ## Next, in order
 
-0. Linux: walk LB2 to LB6 and LM1 to LM17 on Ubuntu (GNOME, Wayland and Xorg) and on an
+0. Linux: walk LB2 to LB6 and LM1 to LM18 on Ubuntu (GNOME, Wayland and Xorg) and on an
    Arch-based KDE system; then a GNOME Shell extension that lists and activates Wayland windows.
 
 1. Walk the manual checks in QA.md on the TV with a DualSense (M1 to M15) and record them

@@ -66,11 +66,12 @@ pipe (`$TMPDIR/sofa-qa/control`) that `qa/qa.sh` drives.
 | `app/src/install.rs` | install, start with Windows, Start menu shortcut, Installed apps entry, uninstall, removing Sofa 1.x |
 | `app/src/store.rs` | `%APPDATA%\sofa\sofa.json`, same keys as Sofa 1.x |
 | `app/src/sound.rs` | interface sounds, synthesized once into in-memory WAVs |
+| `app/src/perf.rs` | the Performance panel and overlay: memory, Sofa's own, each card's video memory (DXGI and PDH's GPU Adapter Memory counters; NVML and amdgpu on Linux, opened once on the short-lived `perf` thread), the frame rate |
 | `app/src/icons.rs` | reads `app/assets/icons.js` (Lucide) and `brand.js` at build time |
 | `app/src/draw.rs` | what both renderers share: Rect, Color, Fit, the art's tone, SVG path data walked into either renderer's paths |
 | `app/build.rs` | icon and version resource through windres (Windows targets only) |
 | `app/src/linux/` | Linux. Picked in `main.rs` in place of the Windows file: `gfx.rs` (tiny-skia into softbuffer, same API), `platform.rs`, `audio.rs` (`pactl`), `media.rs` (MPRIS over zbus), `install.rs` (AppImage, desktop entry, autostart), `startmenu.rs` (desktop entries, `--scan` only). Shared by those: `app.rs` (winit X11 window, loop, single instance, QA pipe, signals), `text.rs` (Figtree with swash, DirectWrite-like layout), `x11.rs` (EWMH, XTest, clipboard), `wm.rs` (what `shell.rs` asks of the window manager), `pads.rs` (evdev, hidraw), `desktop.rs` (desktop entries, icon themes), `proc.rs` (`/proc`, Wine paths), `net.rs` (ureq + rustls), `secret.rs` (AES-GCM, key file), `pulse.rs` (sounds), `clock.rs` |
-| `qa/qa.sh` | the Linux QA run (the same 73 checks) |
+| `qa/qa.sh` | the Linux QA run (the same 76 checks) |
 | `packaging/linux/` | the AppImage's desktop entry and `build-appimage.sh` |
 | `crates/vdf` | Steam's VDF parser, ported with rust-anything (172 recorded cases in `tests/`) |
 | `crates/steam` | turns off "Guide button focuses Steam" in each account's `localconfig.vdf` |

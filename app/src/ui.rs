@@ -564,6 +564,8 @@ pub struct App {
     /// What the Performance panel and the overlay show, and when it was read.
     pub(crate) perf: Option<crate::perf::Usage>,
     perf_at: f64,
+    /// The numbers last shown, so the screen is drawn again only when one changes.
+    perf_shown: String,
     /// The frames drawn in the last second, for the frame rate.
     pub(crate) frames: crate::perf::Frames,
     /// An Xbox (XInput) pad was connected this run: Game Bar's use of its button is offered.
@@ -664,6 +666,7 @@ impl App {
             music_stale: false,
             perf: None,
             perf_at: -1e9,
+            perf_shown: String::new(),
             frames: Default::default(),
             xbox,
             tab: "home".into(),
@@ -2314,8 +2317,8 @@ impl App {
             self.dirty = true;
         }
         // The Performance panel, its card and the overlay show numbers read once a second.
-        let perf_shown = self.store.flag("perfOverlay") || self.layers.iter().any(|l| matches!(l, Layer::Quick { .. } | Layer::Sheet { kind: SheetKind::Perf, .. }));
-        if perf_shown {
+        let perf_up = self.store.flag("perfOverlay") || self.layers.iter().any(|l| matches!(l, Layer::Quick { .. } | Layer::Sheet { kind: SheetKind::Perf, .. }));
+        if perf_up {
             self.read_perf(now, false);
         }
         self.watch_pads(now);
@@ -2894,33 +2897,43 @@ impl App {
                 None => face("timer", "Sleep timer", "Off".into(), false, "Start"),
             },
             Ctl::Light => face("lightbulb", "Controller light", self.light_name().into(), false, "Change"),
-            Ctl::Perf => {
-                let value = self.perf.as_ref().filter(|u| u.ram_total > 0).map_or_else(String::new, |u| format!("{}% memory", crate::perf::percent(u.ram_used, u.ram_total)));
-                face("gauge", "Performance", value, self.store.flag("perfOverlay"), "Open")
-            }
+            Ctl::Perf => face("gauge", "Performance", self.perf_card(), self.store.flag("perfOverlay"), "Open"),
             Ctl::Power => face("shutdown", "Power", String::new(), false, "Open"),
         }
     }
 
-    /// Sofa's frame rate as the panel and the overlay say it ("60 fps, 3.1 ms to draw").
+    /// Sofa's frame rate as the panel and the overlay say it ("60 fps, 3.1 ms to draw"). Sofa
+    /// draws only when something changes, so with fewer than two frames in the last second it is
+    /// idle (and the time a frame takes is left out, or the overlay would draw itself again each
+    /// second to show the time of the frame before).
     pub(crate) fn fps_text(&self, now: f64) -> String {
         let fps = self.frames.fps(now);
         match (fps, self.frames.ms(now)) {
             (2.., Some(ms)) => format!("{fps} fps, {ms:.1} ms to draw"),
-            (_, Some(ms)) => format!("Idle, {ms:.1} ms to draw"),
             _ => "Idle".into(),
         }
     }
 
-    /// Reads memory and video memory again (at most once a second), and the open Performance
-    /// panel with them.
+    /// Reads memory again (at most once a second), and video memory with it while the Performance
+    /// panel or the overlay is up; the open panel follows, and the screen is drawn again only when
+    /// a number on it changed.
     fn read_perf(&mut self, now: f64, force: bool) {
         if !force && now - self.perf_at < 1000.0 {
             return;
         }
-        self.perf = Some(crate::perf::read());
-        self.perf_at = now;
+        let video = self.store.flag("perfOverlay") || self.layers.iter().any(|l| matches!(l, Layer::Sheet { kind: SheetKind::Perf, .. }));
+        let usage = crate::perf::read(video);
+        // Video memory is still being opened (on its own thread, for a tenth of a second or so):
+        // look again soon instead of in a second.
+        self.perf_at = if video && usage.gpus.is_none() { now - 800.0 } else { now };
+        self.perf = Some(usage);
         let opts = self.perf_opts(now);
+        let mut shown: String = opts.iter().filter_map(|o| o.value.as_deref()).collect::<Vec<_>>().join("|");
+        shown.push_str(&self.perf_card());
+        if !force && shown == self.perf_shown {
+            return;
+        }
+        self.perf_shown = shown;
         for l in &mut self.layers {
             if let Layer::Sheet { opts: o, kind: SheetKind::Perf, .. } = l {
                 *o = opts.clone();
@@ -2929,21 +2942,29 @@ impl App {
         self.dirty = true;
     }
 
+    /// The quick menu card's value: "38% memory".
+    fn perf_card(&self) -> String {
+        self.perf.as_ref().filter(|u| u.ram_total > 0).map_or_else(String::new, |u| format!("{}% memory", crate::perf::percent(u.ram_used, u.ram_total)))
+    }
+
     fn perf_opts(&self, now: f64) -> Vec<Opt> {
         let mut opts = vec![Opt::new("Show on screen", Act::Toggle("perfOverlay")).icon("gauge").switch(self.store.flag("perfOverlay"))];
         if let Some(u) = &self.perf {
             if u.ram_total > 0 {
                 opts.push(Opt::new("Memory", Act::Info).value(format!("{}, {}%", crate::perf::of(u.ram_used, u.ram_total), crate::perf::percent(u.ram_used, u.ram_total))));
             }
-            for g in &u.gpus {
-                let value = match g.used {
-                    Some(used) => format!("{}, {}%", crate::perf::of(used, g.total), crate::perf::percent(used, g.total)),
-                    None => format!("{} in all", crate::perf::gb(g.total)),
-                };
-                opts.push(Opt::new("Video memory", Act::Info).detail(g.name.clone()).value(value));
-            }
-            if u.gpus.is_empty() {
-                opts.push(Opt::new("Video memory", Act::Info).value("Not reported by this graphics card"));
+            match &u.gpus {
+                None => opts.push(Opt::new("Video memory", Act::Info).value("Reading")),
+                Some(gpus) if gpus.is_empty() => opts.push(Opt::new("Video memory", Act::Info).value("Not reported by this graphics card")),
+                Some(gpus) => {
+                    for g in gpus {
+                        let value = match g.used {
+                            Some(used) => format!("{}, {}%", crate::perf::of(used, g.total), crate::perf::percent(used, g.total)),
+                            None => format!("{} in all", crate::perf::gb(g.total)),
+                        };
+                        opts.push(Opt::new("Video memory", Act::Info).detail(g.name.clone()).value(value));
+                    }
+                }
             }
             opts.push(Opt::new("Sofa", Act::Info).value(crate::perf::mb(u.sofa)));
         }
@@ -2952,10 +2973,10 @@ impl App {
     }
 
     fn perf_sheet(&mut self, now: f64) {
-        self.read_perf(now, true);
-        let opts = self.perf_opts(now);
         sound::play(Sound::Open);
-        self.layers.push(Layer::Sheet { title: "Performance".into(), sub: "Memory and video memory in use now, and how fast Sofa draws.".into(), opts, focus: 0, kind: SheetKind::Perf });
+        self.layers.push(Layer::Sheet { title: "Performance".into(), sub: "Memory and video memory in use now, and how fast Sofa draws.".into(), opts: Vec::new(), focus: 0, kind: SheetKind::Perf });
+        // Read with the panel open, so video memory is read too; this fills the panel.
+        self.read_perf(now, true);
     }
 
     fn quick_menu(&mut self, now: f64) {

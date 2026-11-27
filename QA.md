@@ -41,6 +41,9 @@ writes `shots\qa.txt`. Exit code 0 means every check passed.
 | U11 | PS again closes the quick menu |
 | U12 | The sleep timer warns a minute before the PC sleeps (QA message 0x8000 + 13) |
 | U13 | Stay awake turns the timer off (a QA run never sleeps the PC) |
+| U14 | Performance in the quick menu opens its panel: memory, video memory, Sofa's memory, frame rate |
+| U15 | Show on screen turns the performance overlay on (saved) |
+| U16 | and off again |
 | T1 | R1 walks the tabs and wraps (Games, Media, Music, Apps, Social, System, Home) |
 | T2 | L1 goes back a tab |
 | T3 | Back returns to Home |
@@ -154,6 +157,7 @@ These need a person, a TV and a controller.
 | M23 | With Steam open (desktop layout on), ○ on Home goes back and never opens the focused tile, on a DualSense and on an Xbox pad |
 | M24 | Xbox pad: the first-run screen and Settings offer "Keep Game Bar off the Xbox button"; with it on, the Xbox button opens Sofa and not Game Bar; off again, Game Bar opens as before |
 | M25 | A game in the background (Assassin's Creed IV): ✕ on its Running card, Resume in its menu, and Stay awake on the sleep warning bring it back without the game reading the press (the character does not jump) |
+| M26 | Performance: each graphics card's video memory agrees with Task Manager's "Dedicated GPU memory"; with Show on screen the overlay stays over Home, sheets and the quick menu, says the TV's refresh rate while focus moves and Idle at rest |
 
 ## 6. Linux
 
@@ -163,7 +167,7 @@ These need a person, a TV and a controller.
 xvfb-run -a -s "-screen 0 1920x1080x24" bash qa/qa.sh target/release/sofa shots/linux
 ```
 
-The same 73 checks as `qa\qa.ps1`, with the same names, run by the Linux workflow
+The same 76 checks as `qa\qa.ps1`, with the same names, run by the Linux workflow
 (`.github/workflows/linux.yml`) on every push under Xvfb. Sofa runs with `--qa --size
 1600x900`: its own folder in `$TMPDIR/sofa-qa`, no window-manager watch, nothing launched,
 installed or changed outside that folder. The run drives it through the QA control pipe
@@ -226,6 +230,7 @@ Wayland first, then Ubuntu on Xorg, and an Arch-based system with KDE Plasma (Wa
 | LM15 | Spotify Connect and ✕ on a playlist plays it on this computer's Spotify |
 | LM16 | Go to desktop shows the desktop; PS brings Sofa back |
 | LM17 | Moving quickly across a long row stays smooth on a 1080p TV; note the CPU on a 4K TV at 100 % scaling |
+| LM18 | Performance: an NVIDIA card (proprietary driver) and an AMD card show their video memory as `nvidia-smi` and `amdgpu_top` do; an Intel card says it is not reported |
 
 ## Results
 

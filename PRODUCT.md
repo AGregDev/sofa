@@ -37,7 +37,7 @@ to start a game or switch apps.
    comes from the games' own art. No lag while moving, no flicker, no surprises,
    and no memory taken from the game you are playing.
 
-## Features (2.2)
+## Features (2.3)
 
 - Home rows: Running, Discord voice, Jump back in, Favorites, Games, Media, Apps
   (each long row ends with an "All ..." tile). ○ on Home returns to the first tile.
@@ -56,6 +56,9 @@ to start a game or switch apps.
   - **Sleep timer**: 30 min, 1 h, 1 h 30 min, 2 h. A minute before the end Sofa comes
     forward with a countdown (Stay awake, Sleep now); games and videos wait in sleep.
   - **Controller light** and **Power** (sleep, restart, shut down, desktop, quit).
+  - **Performance**: the memory in use, each graphics card's video memory, Sofa's own
+    memory and its frame rate. **Show on screen** keeps the same numbers in a small
+    overlay, top left, over everything. They are read only while they show.
   - ≡ opens Settings from here.
 - Running cards name the program itself (Firefox, not the page it shows) with its
   own icon; the page or document shows beside "Running" in the hero.
@@ -129,6 +132,8 @@ so glibc 2.31 or later.
 **Works as on Windows**
 - Home, sections, search with the on-screen keyboard and Paste, item options, settings, the
   first-run screen, the quick menu, the sleep timer, Sleep, Restart, Shut down (systemd).
+- Performance and its overlay; video memory from NVIDIA's driver (NVML) and from amdgpu, none
+  for other cards (Intel's, nouveau).
 - Every pad through evdev, read whichever window has the focus: DualSense, Xbox and other
   xpad pads, Switch Pro; the PS (Guide) button brings Sofa forward from inside a game with that
   game first, and ✕ hands it back once the button is up. The keyboard works too.

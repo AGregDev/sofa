@@ -1,6 +1,10 @@
 //! What the Performance panel (quick menu) and the performance overlay show: the memory in use,
 //! each graphics card's video memory, Sofa's own memory, and how fast Sofa draws. Read once a
-//! second, and only while the panel or the overlay is up.
+//! second, and only while the panel or the overlay is up (the quick menu's card: memory alone).
+//!
+//! What video memory is read from is slow to open (PDH's counter takes about a tenth of a second
+//! to add, NVML about as long to start), so the first read opens it on a short-lived thread and
+//! the UI thread never waits; reading it after that takes microseconds.
 //!
 //! Windows: GlobalMemoryStatusEx, the process's working set, DXGI's adapters and the "GPU
 //! Adapter Memory" performance counters (video memory in use by every program). Linux:
@@ -8,6 +12,8 @@
 //! `mem_info_vram_*` files. Nothing is changed anywhere, so a QA run reads them too.
 
 use std::collections::VecDeque;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A graphics card's video memory (`used` None: the card does not say).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -23,12 +29,34 @@ pub struct Usage {
     pub ram_total: u64,
     /// Sofa's own memory (working set, resident).
     pub sofa: u64,
-    pub gpus: Vec<Gpu>,
+    /// None: not asked for, or still being opened.
+    pub gpus: Option<Vec<Gpu>>,
 }
 
-pub fn read() -> Usage {
+/// Memory in use now, and each card's video memory when `video` is set.
+pub fn read(video: bool) -> Usage {
     let (ram_used, ram_total) = ram();
-    Usage { ram_used, ram_total, sofa: own(), gpus: gpus() }
+    Usage { ram_used, ram_total, sofa: own(), gpus: if video { gpus() } else { None } }
+}
+
+/// Each card's video memory, or None while what it is read from is being opened.
+fn gpus() -> Option<Vec<Gpu>> {
+    static SOURCE: OnceLock<Source> = OnceLock::new();
+    static OPENING: AtomicBool = AtomicBool::new(false);
+    if let Some(source) = SOURCE.get() {
+        return Some(source.read());
+    }
+    if !OPENING.swap(true, Ordering::AcqRel)
+        && std::thread::Builder::new()
+            .name("perf".into())
+            .spawn(|| {
+                let _ = SOURCE.set(Source::open());
+            })
+            .is_err()
+    {
+        OPENING.store(false, Ordering::Release);
+    }
+    None
 }
 
 /// The frames Sofa drew in the last second and how long each took to draw.
@@ -95,28 +123,59 @@ fn own() -> u64 {
     if unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) }.is_ok() { c.WorkingSetSize as u64 } else { 0 }
 }
 
+/// The cards DXGI lists (their names, LUIDs and video memory, read once) and PDH's query of the
+/// "GPU Adapter Memory" counters, which stays open for the next read.
 #[cfg(windows)]
-fn gpus() -> Vec<Gpu> {
-    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
-    let mut out = Vec::new();
-    // SAFETY: plain factory creation.
-    let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else { return out };
-    let usage = dedicated_usage();
-    for i in 0..16 {
-        // SAFETY: enumerating adapters until DXGI says there are no more.
-        let Ok(adapter) = (unsafe { factory.EnumAdapters1(i) }) else { break };
-        // SAFETY: a description copied into a local.
-        let Ok(d) = (unsafe { adapter.GetDesc1() }) else { continue };
-        // DXGI_ADAPTER_FLAG_SOFTWARE (Microsoft's software renderer), and adapters without
-        // video memory of their own, are left out.
-        if d.Flags & 2 != 0 || d.DedicatedVideoMemory == 0 {
-            continue;
+struct Source {
+    cards: Vec<(String, (i32, u32), u64)>,
+    /// The query and its counter, as the addresses PDH's handles are: PDH may be called with
+    /// them from any thread, and it locks each query itself.
+    counter: Option<(usize, usize)>,
+}
+
+#[cfg(windows)]
+impl Source {
+    fn open() -> Source {
+        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+        use windows::Win32::System::Performance::*;
+        use windows::core::{PCWSTR, w};
+        let mut cards = Vec::new();
+        // SAFETY: plain factory creation.
+        if let Ok(factory) = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() } {
+            for i in 0..16 {
+                // SAFETY: enumerating adapters until DXGI says there are no more.
+                let Ok(adapter) = (unsafe { factory.EnumAdapters1(i) }) else { break };
+                // SAFETY: a description copied into a local.
+                let Ok(d) = (unsafe { adapter.GetDesc1() }) else { continue };
+                // DXGI_ADAPTER_FLAG_SOFTWARE (Microsoft's software renderer), and adapters
+                // without video memory of their own, are left out.
+                if d.Flags & 2 != 0 || d.DedicatedVideoMemory == 0 {
+                    continue;
+                }
+                let n = d.Description.iter().position(|&c| c == 0).unwrap_or(d.Description.len());
+                cards.push((String::from_utf16_lossy(&d.Description[..n]).trim().to_owned(), (d.AdapterLuid.HighPart, d.AdapterLuid.LowPart), d.DedicatedVideoMemory as u64));
+            }
         }
-        let n = d.Description.iter().position(|&c| c == 0).unwrap_or(d.Description.len());
-        let used = usage.iter().find(|(l, _)| *l == (d.AdapterLuid.HighPart, d.AdapterLuid.LowPart)).map(|(_, u)| *u);
-        out.push(Gpu { name: String::from_utf16_lossy(&d.Description[..n]).trim().to_owned(), used, total: d.DedicatedVideoMemory as u64 });
+        let (mut query, mut counter) = (PDH_HQUERY::default(), PDH_HCOUNTER::default());
+        // SAFETY: the query and counter handles are written into locals; a failed counter closes
+        // its query.
+        let counter = unsafe {
+            if PdhOpenQueryW(PCWSTR::null(), 0, &mut query) != 0 {
+                None
+            } else if PdhAddEnglishCounterW(query, w!("\\GPU Adapter Memory(*)\\Dedicated Usage"), 0, &mut counter) != 0 {
+                PdhCloseQuery(query);
+                None
+            } else {
+                Some((query.0 as usize, counter.0 as usize))
+            }
+        };
+        Source { cards, counter }
     }
-    out
+
+    fn read(&self) -> Vec<Gpu> {
+        let usage = self.counter.map(|(q, c)| dedicated_usage(q, c)).unwrap_or_default();
+        self.cards.iter().map(|(name, luid, total)| Gpu { name: name.clone(), used: usage.iter().find(|(l, _)| l == luid).map(|(_, u)| *u), total: *total }).collect()
+    }
 }
 
 /// "luid_0x00000000_0x0000F3D8_phys_0": an adapter's LUID (high, low).
@@ -128,35 +187,12 @@ fn parse_luid(name: &str) -> Option<(i32, u32)> {
     Some((u32::from_str_radix(high, 16).ok()? as i32, u32::from_str_radix(low, 16).ok()?))
 }
 
-/// Video memory in use on each adapter, by every program: the "GPU Adapter Memory" counters.
-/// The query stays open for the next read.
+/// Video memory in use on each adapter, by every program: the "GPU Adapter Memory" counters
+/// (about 30 microseconds).
 #[cfg(windows)]
-fn dedicated_usage() -> Vec<((i32, u32), u64)> {
-    use std::cell::Cell;
+fn dedicated_usage(query: usize, counter: usize) -> Vec<((i32, u32), u64)> {
     use windows::Win32::System::Performance::*;
-    use windows::core::{PCWSTR, w};
-    thread_local! {
-        static QUERY: Cell<Option<(PDH_HQUERY, PDH_HCOUNTER)>> = const { Cell::new(None) };
-    }
-    let handles = QUERY.with(|q| {
-        if q.get().is_none() {
-            let (mut query, mut counter) = (PDH_HQUERY::default(), PDH_HCOUNTER::default());
-            // SAFETY: the query and counter handles are written into locals; a failed counter
-            // closes its query.
-            unsafe {
-                if PdhOpenQueryW(PCWSTR::null(), 0, &mut query) != 0 {
-                    return None;
-                }
-                if PdhAddEnglishCounterW(query, w!("\\GPU Adapter Memory(*)\\Dedicated Usage"), 0, &mut counter) != 0 {
-                    PdhCloseQuery(query);
-                    return None;
-                }
-            }
-            q.set(Some((query, counter)));
-        }
-        q.get()
-    });
-    let Some((query, counter)) = handles else { return Vec::new() };
+    let (query, counter) = (PDH_HQUERY(query as *mut _), PDH_HCOUNTER(counter as *mut _));
     let mut out: Vec<((i32, u32), u64)> = Vec::new();
     // SAFETY: the counter's values are read into a buffer of the size PDH asks for (u64s, so its
     // items, which hold pointers and 64-bit values, are aligned); each item's name points into
@@ -202,8 +238,24 @@ fn own() -> u64 {
     std::fs::read_to_string("/proc/self/status").ok().and_then(|t| t.lines().find_map(|l| l.strip_prefix("VmRSS:")?.trim().strip_suffix("kB")?.trim().parse::<u64>().ok())).unwrap_or(0) * 1024
 }
 
+/// NVIDIA's cards through NVML (started once), AMD's through amdgpu's files.
 #[cfg(target_os = "linux")]
-fn gpus() -> Vec<Gpu> {
+struct Source;
+
+#[cfg(target_os = "linux")]
+impl Source {
+    fn open() -> Source {
+        nvml::start();
+        Source
+    }
+
+    fn read(&self) -> Vec<Gpu> {
+        cards()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn cards() -> Vec<Gpu> {
     let mut out = nvml::gpus();
     // amdgpu reports its video memory in sysfs.
     if let Ok(list) = std::fs::read_dir("/sys/class/drm") {
@@ -253,6 +305,11 @@ mod nvml {
     unsafe impl Send for Lib {}
     // SAFETY: as above; NVML's calls are thread-safe.
     unsafe impl Sync for Lib {}
+
+    /// Loads and starts NVML (once; it takes about a tenth of a second).
+    pub fn start() {
+        lib();
+    }
 
     fn lib() -> Option<&'static Lib> {
         static LIB: OnceLock<Option<Lib>> = OnceLock::new();
@@ -346,8 +403,23 @@ mod tests {
 
     #[test]
     fn this_computer_has_memory() {
-        let u = read();
+        let u = read(false);
         assert!(u.ram_total > 0 && u.ram_used <= u.ram_total);
         assert!(u.sofa > 0);
+        assert_eq!(u.gpus, None, "video memory only when asked");
+    }
+
+    #[test]
+    fn video_memory_opens_off_the_ui_thread() {
+        let start = std::time::Instant::now();
+        let first = read(true);
+        assert!(start.elapsed().as_millis() < 50, "the first read waits for nothing: {:?}", start.elapsed());
+        if first.gpus.is_some() {
+            return;
+        }
+        while read(true).gpus.is_none() {
+            assert!(start.elapsed().as_secs() < 10, "video memory never opened");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 }
