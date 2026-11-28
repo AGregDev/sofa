@@ -160,6 +160,11 @@ points to, then `../../CLAUDE.md`.
 4. Custom covers and uninstalling from Sofa (the `cover` override is already read).
 5. Automate D1 to D4: a real Sofa in a window, PS posted as WM_PAD_HOME, then the foreground
    and minimized state checked (how this round's desktop bug was reproduced).
+6. The performance overlay over a real game (M26): its FPS against the game's own counter, and
+   over Sofa when PS brings it back. Then Vulkan and OpenGL frame rates (Microsoft-Windows-
+   DxgKrnl's present events, as PresentMon reads them).
+7. The setup cannot replace a Sofa started as administrator: its taskkill is refused and the
+   copy fails (os error 32, seen for 2.3.0). Say "Quit Sofa, then run the setup again" then.
 
 ## Known issues
 

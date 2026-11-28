@@ -83,10 +83,10 @@ Windows, and on Linux it is an X11 program drawn on the CPU, with the same look.
 
 | | Sofa 1.3 (Electron) | Sofa 2.3 on Windows | Sofa 2.3 on Linux |
 | --- | --- | --- | --- |
-| Memory on Home | 564 MB, 6 processes | 55 to 80 MB, 1 process | about 40 MB, 1 process |
-| Memory while a game runs | same | about 18 MB (Sofa gives its art back) | about 32 MB |
+| Memory on Home | 564 MB, 6 processes | 55 to 70 MB, 1 process | about 40 MB, 1 process |
+| Memory while a game runs | same | about 18 MB (Sofa gives its art back) | about 33 MB |
 | Idle CPU | a helper polling every 30 ms | 0 % (it sleeps until something happens) | 0 % |
-| Download | 122 MB installer, 358 MB installed | 2.1 MB, one file | 4.5 MB, one AppImage |
+| Download | 122 MB installer, 358 MB installed | 2.1 MB, one file | 4.6 MB, one AppImage |
 
 Focus moves, scrolling and the hero art run at the display's refresh rate; art is decoded
 off the main thread at the size it is drawn. Every release is optimized (link-time

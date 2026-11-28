@@ -234,14 +234,34 @@ Wayland first, then Ubuntu on Xorg, and an Arch-based system with KDE Plasma (Wa
 
 ## Results
 
-### Linux port (branch `linux-appimage`, 2026-11-27)
+### 2.3.0 (2026-11-28)
 
-- Windows, built from the branch: automated UI run 73 of 73 PASS (Home 64.8 MB working set,
-  85.4 MB private, 14 threads, 0.31 % idle CPU; 17.8 MB after giving memory back; first frame
-  in 168 ms); `cargo test --workspace` and `cargo clippy --workspace --all-targets`: all PASS, no
-  warnings.
-- Linux, in the workflow (Ubuntu 20.04 container, Xvfb): see the pull request for the run;
-  LB1 is checked there. LB2 to LB6 and LM1 to LM17: not walked (no Linux hardware yet).
+- Windows, automated UI run: 76 of 76 PASS (new: U14 to U16; U15 and U16 check the overlay's
+  own window). Home: 67.4 MB working set, 89 MB private, 14 threads, 0 % idle CPU; 17.6 MB
+  after giving memory back; first frame in 79 ms. Home right after start measures 53.5 MB;
+  opening Performance adds about 3.6 MB (PDH's GPU counters, kept open) and the overlay's
+  window 0.6 MB.
+- Windows frame rate: the opt-in `frames_are_counted` PASS, 42 frames a second for a program
+  presenting about 41.6 (Claude's GPU process; this account is in Performance Log Users).
+  Not yet seen over a game (M26).
+- Linux, in the workflow (Ubuntu 20.04 container, Xvfb, run 46088710461): 76 of 76 PASS. Home:
+  38.2 MB resident, 7 threads, 0 % idle CPU; 32.6 MB after giving memory back; first
+  frame in 70 ms. LB1 PASS: `Sofa-Setup-2.3.0-x86_64.AppImage` (4.6 MB) built and
+  started in QA mode.
+- Unit tests and clippy (`--all-targets`; on Linux with `-D warnings`) on both systems: all
+  PASS, no warnings (new: CPU time, card names, GPU use per engine type, the frame rate's
+  arithmetic, video memory opening off the UI thread). The Linux target also type-checks from
+  Windows.
+- Build, install: B1 to B3 PASS with an earlier build of this branch (00:13, the same setup
+  code): it replaced the installed 2.2.2, Installed apps shows 2.3.0, the Start menu shortcut
+  and the start-with-Windows entry point at the installed file, and Sofa 2.3.0 started from
+  it. The final build (`dist\Sofa-Setup-2.3.0.exe`, 2.1 MB, version resource 2.3.0) did not
+  replace it: the Sofa running then had most likely been started as administrator, the setup
+  (not elevated) could not stop it, and it said "Couldn't copy Sofa: The process cannot access
+  the file because it is being used by another process. (os error 32)". Nothing changed. B4
+  not rerun.
+- Not walked: M1 to M26 for this release, and on Linux LB2 to LB6 and LM1 to LM18 (no Linux
+  PC with a controller and a TV yet).
 
 ### 2.2.2 (2026-11-27)
 
