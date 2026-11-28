@@ -160,7 +160,19 @@ fn epoch_ms() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as f64).unwrap_or(0.0)
 }
 
+/// Random bytes from the kernel.
+#[cfg(target_os = "linux")]
+fn random(n: usize) -> Vec<u8> {
+    crate::linux::secret::random(n)
+}
+
+#[cfg(target_os = "linux")]
+fn sha256(data: &[u8]) -> [u8; 32] {
+    crate::linux::secret::sha256(data)
+}
+
 /// Random bytes from Windows' system generator.
+#[cfg(windows)]
 fn random(n: usize) -> Vec<u8> {
     use windows::Win32::Security::Cryptography::{BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom};
     let mut b = vec![0u8; n];
@@ -169,6 +181,7 @@ fn random(n: usize) -> Vec<u8> {
     b
 }
 
+#[cfg(windows)]
 fn sha256(data: &[u8]) -> [u8; 32] {
     use windows::Win32::Security::Cryptography::{BCRYPT_SHA256_ALG_HANDLE, BCryptHash};
     let mut out = [0u8; 32];
@@ -238,6 +251,7 @@ struct Worker {
 impl Worker {
     fn run(mut self, rx: Receiver<Req>) {
         // SAFETY: COM for this thread, for ShellExecute (starting Spotify).
+        #[cfg(windows)]
         let _ = unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED) };
         if configured(&self.cfg) {
             self.publish(|m| m.busy = true);
@@ -302,15 +316,7 @@ impl Worker {
                 return;
             }
         }
-        // SAFETY: posting to Sofa's window; a closed window drops it.
-        unsafe {
-            let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
-                Some(windows::Win32::Foundation::HWND(self.hwnd as *mut _)),
-                WM_MUSIC,
-                windows::Win32::Foundation::WPARAM(0),
-                windows::Win32::Foundation::LPARAM(0),
-            );
-        }
+        crate::post(self.hwnd, WM_MUSIC, 0);
     }
 
     fn obj(&mut self) -> &mut serde_json::Map<String, Value> {
@@ -543,7 +549,10 @@ impl Worker {
         if status != 200 {
             return Ok(None);
         }
+        #[cfg(windows)]
         let pc = std::env::var("COMPUTERNAME").unwrap_or_default().to_lowercase();
+        #[cfg(target_os = "linux")]
+        let pc = crate::linux::proc::hostname().to_lowercase();
         let list: Vec<&Value> = v.get("devices").and_then(Value::as_array).map(|l| l.iter().collect()).unwrap_or_default();
         let computer = |d: &Value| d.get("type").and_then(Value::as_str).is_some_and(|t| t.eq_ignore_ascii_case("computer"));
         let computers = || list.iter().copied().filter(|d| computer(d));
@@ -566,7 +575,25 @@ impl Worker {
     }
 }
 
+/// Spotify's app on this PC: the installed one (its package, Flatpak or Snap), else whatever
+/// opens `spotify:`.
+#[cfg(target_os = "linux")]
+fn start_app() {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let found = crate::linux::desktop::which("spotify")
+        .or_else(|| [home.join(".local/share/flatpak/exports/bin/com.spotify.Client"), PathBuf::from("/var/lib/flatpak/exports/bin/com.spotify.Client"), PathBuf::from("/snap/bin/spotify")].into_iter().find(|p| p.is_file()));
+    match found {
+        Some(exe) => {
+            crate::platform::spawn_detached(std::process::Command::new(exe));
+        }
+        None => {
+            crate::platform::open("spotify:");
+        }
+    }
+}
+
 /// Spotify's app on this PC: the installed one minimized, else whatever opens `spotify:`.
+#[cfg(windows)]
 fn start_app() {
     let exe = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_default().join("Spotify").join("Spotify.exe");
     if exe.exists() {

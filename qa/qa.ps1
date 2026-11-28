@@ -21,6 +21,7 @@ public static class QaWin {
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
 }
 '@
@@ -110,6 +111,21 @@ function Shot([string]$name, [int]$settle = 900) {
   $g = [System.Drawing.Graphics]::FromImage($bmp)
   $hdc = $g.GetHdc()
   [QaWin]::PrintWindow($script:h, $hdc, 2) | Out-Null
+  $g.ReleaseHdc($hdc); $g.Dispose()
+  $bmp.Save((Join-Path $Out "$name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+  $bmp.Dispose()
+}
+
+# Another of Sofa's windows (the overlay), as it draws itself.
+function Shot-Window([IntPtr]$win, [string]$name) {
+  $r = New-Object QaWin+RECT
+  [QaWin]::GetClientRect($win, [ref]$r) | Out-Null
+  if ($r.R -le 0 -or $r.B -le 0) { return }
+  $bmp = New-Object System.Drawing.Bitmap $r.R, $r.B
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  $g.Clear([System.Drawing.Color]::FromArgb(255, 70, 70, 70))
+  $hdc = $g.GetHdc()
+  [QaWin]::PrintWindow($win, $hdc, 2) | Out-Null
   $g.ReleaseHdc($hdc); $g.Dispose()
   $bmp.Save((Join-Path $Out "$name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
   $bmp.Dispose()
@@ -220,6 +236,29 @@ Shot '19-sleep-warning' 600
 Key Enter
 $s = State
 Check 'U13 Stay awake turns the timer off' ($s.sleep -eq 'off' -and $s.layer -eq 'none') "sleep $($s.sleep), $($s.layer)"
+
+# ---------- Performance (quick menu) ----------
+# CPU, GPU, memory and video memory are read from this PC (nothing changes). The overlay is a
+# window of its own; in a QA run it is not topmost and has no frame rate (no ETW session).
+Key Home
+Key Right 6
+Key Enter
+$s = State
+Check 'U14 Performance shows CPU, GPU, memory and video memory' ($s.layer -eq 'sheet:Performance:0') $s.layer
+Shot '22-performance' 900
+Key Enter
+Start-Sleep -Milliseconds 1200
+$s = State
+$overlay = [QaWin]::FindWindow('SofaOverlayQA', [IntPtr]::Zero)
+$shown = $overlay -ne [IntPtr]::Zero -and [QaWin]::IsWindowVisible($overlay)
+Check 'U15 The overlay shows in a window of its own (saved)' ((Settings).settings.perfOverlay -eq $true -and $s.overlay -eq 'on' -and $shown) "$((Settings).settings.perfOverlay), overlay $($s.overlay), window shown $shown"
+Shot-Window $overlay '23-performance-overlay'
+Key Enter
+Key Esc
+Key Home
+$s = State
+$shown = $overlay -ne [IntPtr]::Zero -and [QaWin]::IsWindowVisible($overlay)
+Check 'U16 and off again' ((Settings).settings.perfOverlay -eq $false -and $s.overlay -eq 'off' -and -not $shown -and $s.layer -eq 'none') "$((Settings).settings.perfOverlay), overlay $($s.overlay), window shown $shown, $($s.layer)"
 
 # ---------- Tabs ----------
 $tabs = @()

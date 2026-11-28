@@ -8,7 +8,7 @@ Since ADR-008 the native app is Sofa (2.0) and the Electron sources are gone fro
 Decisions: [DECISIONS.md](DECISIONS.md) (ADR-001 native UI, ADR-002 how each part is proven,
 ADR-003 keep settings and data, ADR-004 YouTube TV in the browser, ADR-005 superseded,
 ADR-006 no checkpoints, ADR-007 toolchain, ADR-008 native only, ADR-009 streaming in Chromium
-under Sofa's launch screen). Terms:
+under Sofa's launch screen, ADR-010 Linux). Terms:
 [GLOSSARY.md](GLOSSARY.md). Next: [HANDOFF.md](HANDOFF.md).
 
 ## Logic units
@@ -44,6 +44,7 @@ under Sofa's launch screen). Terms:
 | Quick menu, Now playing, sleep timer | (new) | done (`ui.rs`, `view.rs`, `media.rs`) |
 | Spotify library and playback (Music tab) | (new) | done (`spotify.rs`), not yet tried against a real account |
 | Custom covers, uninstalling games and apps | `main.js`, `uninstall.ps1` | not yet |
+| Linux: X11 window, CPU renderer, evdev and hidraw pads, EWMH, desktop entries, MPRIS, `pactl`, AppImage (ADR-010) | (new) | done (`app/src/linux/`); QA run in CI under Xvfb, not yet tried on Linux hardware |
 
 ## Measured
 

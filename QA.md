@@ -2,7 +2,7 @@
 
 A release ships only when every automated check passes and the manual checks
 have been walked on real hardware. Results for each release are recorded at the
-bottom.
+bottom. Sections 1 to 5 are Windows; section 6 is Linux.
 
 ## 1. Automated UI run: `qa\qa.ps1`
 
@@ -41,6 +41,9 @@ writes `shots\qa.txt`. Exit code 0 means every check passed.
 | U11 | PS again closes the quick menu |
 | U12 | The sleep timer warns a minute before the PC sleeps (QA message 0x8000 + 13) |
 | U13 | Stay awake turns the timer off (a QA run never sleeps the PC) |
+| U14 | Performance in the quick menu opens its panel: CPU, memory, each card's use and video memory |
+| U15 | Show on screen shows the overlay in a window of its own (saved; in QA not topmost, no frame rate); `shots\23-performance-overlay.png` |
+| U16 | and off again: the window hides |
 | T1 | R1 walks the tabs and wraps (Games, Media, Music, Apps, Social, System, Home) |
 | T2 | L1 goes back a tab |
 | T3 | Back returns to Home |
@@ -154,8 +157,111 @@ These need a person, a TV and a controller.
 | M23 | With Steam open (desktop layout on), ○ on Home goes back and never opens the focused tile, on a DualSense and on an Xbox pad |
 | M24 | Xbox pad: the first-run screen and Settings offer "Keep Game Bar off the Xbox button"; with it on, the Xbox button opens Sofa and not Game Bar; off again, Game Bar opens as before |
 | M25 | A game in the background (Assassin's Creed IV): ✕ on its Running card, Resume in its menu, and Stay awake on the sleep warning bring it back without the game reading the press (the character does not jump) |
+| M26 | Performance: CPU, GPU and video memory agree with Task Manager. With Show on screen, start a DirectX game: the overlay stays over it (borderless or windowed), over Sofa when PS brings it back, and over the desktop; its FPS agrees with the game's own counter or Game Bar's. Without Performance Log Users, Allow shows Windows' prompt, and after signing in again the frame rate shows |
+
+## 6. Linux
+
+### Automated UI run: `qa/qa.sh`
+
+```bash
+xvfb-run -a -s "-screen 0 1920x1080x24" bash qa/qa.sh target/release/sofa shots/linux
+```
+
+The same 76 checks as `qa\qa.ps1`, with the same names, run by the Linux workflow
+(`.github/workflows/linux.yml`) on every push under Xvfb. Sofa runs with `--qa --size
+1600x900`: its own folder in `$TMPDIR/sofa-qa`, no window-manager watch, nothing launched,
+installed or changed outside that folder. The run drives it through the QA control pipe
+(`$TMPDIR/sofa-qa/control`: `key Down`, `type text`, `down Enter`, `up Enter`, `home`, `trim`,
+`sleep`, `run <window>`, `shot <name>`, `quit`), reads the same state line, and saves Sofa's
+own frames to `shots/linux/` (uploaded with the AppImage as the `sofa-linux` artifact). Where
+Linux differs:
+
+| ID | On Linux |
+| --- | --- |
+| L1 | The desktop entries are listed in the background (`cache/startmenu.json`): the run adds three made-up ones (a game, a player, an app) to its own `XDG_DATA_DIRS`, and the game must be in Games with its SVG icon drawn to a PNG |
+| R1 to R5 | The stand-in window is an `xmessage` |
+| P1 to P4 | Resident memory (`VmRSS`), CPU time and threads from `/proc` |
+| Q5 | The session ending (SIGTERM) saves and quits |
+| X1 | Untouched: `~/.config/sofa/sofa.json` and `key`, the autostart entry, the desktop entry, `~/.local/bin/sofa`, and Steam's setting in every `localconfig.vdf` |
+
+### Unit tests and lints
+
+`cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings` run on
+Linux in the same workflow. The Linux-only tests: Figtree layout (trimming with an ellipsis,
+wrapping to a line count, centring, glyphs), SVG arcs and rounded rectangles, image decoding
+to premultiplied BGRA, desktop entry parsing and Exec field codes, Wine paths, `pactl`'s sinks
+and volume lines, evdev and hidraw ioctl numbers, MPRIS player names, the desktop entry Sofa
+installs, and the clock's format. From Windows the Linux build type-checks with
+`cargo clippy --target x86_64-unknown-linux-gnu --no-default-features` (without HTTPS: its
+`ring` cannot be compiled there).
+
+### Build and install
+
+| ID | Check |
+| --- | --- |
+| LB1 | The workflow builds `Sofa-Setup-<version>-x86_64.AppImage`, and the AppImage starts in QA mode under Xvfb |
+| LB2 | Run once (after `chmod +x`), the AppImage installs to `~/.local/bin/sofa` with no root, adds Sofa to the app grid and starts it |
+| LB3 | Running a newer setup AppImage replaces the installed copy, stopping the running Sofa, and keeps `~/.config/sofa` |
+| LB4 | "Start Sofa when you sign in" writes `~/.config/autostart/sofa.desktop`; after signing in again Sofa starts full screen, in front |
+| LB5 | The app grid's "Uninstall Sofa" action (or `sofa --uninstall`) asks, then removes the program, the desktop entry, the icon and the autostart entry, and keeps `~/.config/sofa` |
+| LB6 | A build from source: `cargo build --release`, then `target/release/sofa --install` does the same as LB2 |
+
+### Manual, on real hardware
+
+These need a person, a TV, a controller and a Linux install: Ubuntu 24.04 with GNOME on
+Wayland first, then Ubuntu on Xorg, and an Arch-based system with KDE Plasma (Wayland).
+
+| ID | Check |
+| --- | --- |
+| LM1 | DualSense over USB and Bluetooth: D-pad, sticks, ✕ ○ △ □ (□ searches, △ opens options), L1 R1, L2 R2 volume, Options; the battery shows in the top bar |
+| LM2 | Xbox pad (xpad) and an 8BitDo or Switch Pro pad: A selects, B goes back, X searches, Y opens options, Guide goes home |
+| LM3 | PS from a Proton game (XWayland) brings Sofa forward with the game first; ✕ resumes it and the game does not read the press. Same on Xorg and on KDE |
+| LM4 | PS over a Wayland app (GNOME Files) brings Sofa forward; the app has no Running card (a known gap) |
+| LM5 | With `steam-devices` installed: the lightbar takes the game's colour after focus rests, the player light shows, the mute button mutes the default microphone with its LED lit, also from inside a game. Without it: buttons work, no lights, and the log says why |
+| LM6 | Steam open with its desktop layout: ○ on Home goes back and never opens the focused tile |
+| LM7 | Steam's "Guide button focuses Steam": with Steam closed, starting Sofa turns it off and says so; with Steam open, Fix it now restarts Steam; PS no longer brings Steam forward |
+| LM8 | A Steam game from a native Steam and from Flatpak Steam starts from its tile; a desktop app (GNOME Files, a Flatpak app) starts from Apps; picking an open one switches to it |
+| LM9 | A game that exits on its own brings Sofa back with nothing in Running |
+| LM10 | YouTube in Chrome (deb) and in Firefox (Snap, Ubuntu's own): Sofa's launch screen, then YouTube's TV interface full screen; the D-pad, ✕ and ○ drive it, □ plays and pauses |
+| LM11 | Quick menu: Sound output lists the TV by its own name and switches to headphones, a video keeps playing on the new output; volume and microphone mute change the system's own |
+| LM12 | Quick menu: Spotify (deb, Flatpak or Snap) playing shows its track and art; ✕ pauses, L1 and R1 skip |
+| LM13 | Sleep from System and the sleep timer suspend the PC; after waking Sofa is in front and draws |
+| LM14 | Discord (deb or Flatpak): Connect, then Home shows your channel; Mute and Deafen follow at once |
+| LM15 | Spotify Connect and ✕ on a playlist plays it on this computer's Spotify |
+| LM16 | Go to desktop shows the desktop; PS brings Sofa back |
+| LM17 | Moving quickly across a long row stays smooth on a 1080p TV; note the CPU on a 4K TV at 100 % scaling |
+| LM18 | Performance: an NVIDIA card (proprietary driver) and an AMD card show their use and video memory as `nvidia-smi` and `amdgpu_top` do; an Intel card says it is not reported. The overlay stays over a Proton game on GNOME (Wayland and Xorg) and KDE |
 
 ## Results
+
+### 2.3.0 (2026-11-28)
+
+- Windows, automated UI run: 76 of 76 PASS (new: U14 to U16; U15 and U16 check the overlay's
+  own window). Home: 67.4 MB working set, 89 MB private, 14 threads, 0 % idle CPU; 17.6 MB
+  after giving memory back; first frame in 79 ms. Home right after start measures 53.5 MB;
+  opening Performance adds about 3.6 MB (PDH's GPU counters, kept open) and the overlay's
+  window 0.6 MB.
+- Windows frame rate: the opt-in `frames_are_counted` PASS, 42 frames a second for a program
+  presenting about 41.6 (Claude's GPU process; this account is in Performance Log Users).
+  Not yet seen over a game (M26).
+- Linux, in the workflow (Ubuntu 20.04 container, Xvfb, run 46088710461): 76 of 76 PASS. Home:
+  38.2 MB resident, 7 threads, 0 % idle CPU; 32.6 MB after giving memory back; first
+  frame in 70 ms. LB1 PASS: `Sofa-Setup-2.3.0-x86_64.AppImage` (4.6 MB) built and
+  started in QA mode.
+- Unit tests and clippy (`--all-targets`; on Linux with `-D warnings`) on both systems: all
+  PASS, no warnings (new: CPU time, card names, GPU use per engine type, the frame rate's
+  arithmetic, video memory opening off the UI thread). The Linux target also type-checks from
+  Windows.
+- Build, install: B1 to B3 PASS with an earlier build of this branch (00:13, the same setup
+  code): it replaced the installed 2.2.2, Installed apps shows 2.3.0, the Start menu shortcut
+  and the start-with-Windows entry point at the installed file, and Sofa 2.3.0 started from
+  it. The final build (`dist\Sofa-Setup-2.3.0.exe`, 2.1 MB, version resource 2.3.0) did not
+  replace it: the Sofa running then had most likely been started as administrator, the setup
+  (not elevated) could not stop it, and it said "Couldn't copy Sofa: The process cannot access
+  the file because it is being used by another process. (os error 32)". Nothing changed. B4
+  not rerun.
+- Not walked: M1 to M26 for this release, and on Linux LB2 to LB6 and LM1 to LM18 (no Linux
+  PC with a controller and a TV yet).
 
 ### 2.2.2 (2026-11-27)
 

@@ -1,9 +1,13 @@
 //! Interface sounds: short, quiet tones synthesized once into in-memory WAV files and played
-//! asynchronously by Windows (no files, no audio thread of Sofa's own).
+//! asynchronously by Windows (no files, no audio thread of Sofa's own). On Linux a `sound`
+//! thread plays them through PulseAudio's simple API (PipeWire answers it too), loaded at run
+//! time, keeping its stream open only while sounds play.
 
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(windows)]
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
+#[cfg(windows)]
 use windows::core::PCWSTR;
 
 pub static ENABLED: AtomicBool = AtomicBool::new(true);
@@ -71,6 +75,15 @@ static SOUNDS: LazyLock<[Vec<u8>; 7]> = LazyLock::new(|| {
     ]
 });
 
+#[cfg(target_os = "linux")]
+pub fn play(s: Sound) {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    crate::linux::pulse::play(&SOUNDS[s as usize][44..], RATE);
+}
+
+#[cfg(windows)]
 pub fn play(s: Sound) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;

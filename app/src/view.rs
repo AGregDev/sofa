@@ -86,6 +86,62 @@ impl App {
         }
     }
 
+    /// The performance overlay, in one line in its own window over every program, top left: CPU
+    /// and GPU use, memory, video memory (of the card with the most), and the frame rate of the
+    /// program in front. Each value keeps the width of its widest, so the line keeps its size as
+    /// the numbers change.
+    pub(crate) fn draw_overlay(&mut self) {
+        let Some(u) = self.perf.clone() else { return };
+        let gpu = u.gpus.as_deref().and_then(crate::perf::main_gpu).cloned();
+        let mut items: Vec<(&str, String, &str)> = Vec::new();
+        if let Some(c) = u.cpu {
+            items.push(("CPU", format!("{c}%"), "100%"));
+        }
+        if let Some(b) = gpu.as_ref().and_then(|g| g.busy) {
+            items.push(("GPU", format!("{b}%"), "100%"));
+        }
+        if u.ram_total > 0 {
+            items.push(("RAM", crate::perf::gb(u.ram_used), "00.0 GB"));
+        }
+        if let Some(v) = gpu.as_ref().and_then(|g| g.used) {
+            items.push(("VRAM", crate::perf::gb(v), "00.0 GB"));
+        }
+        if let Some(f) = self.fps {
+            items.push(("FPS", f.to_string(), "000"));
+        }
+        if items.is_empty() {
+            return;
+        }
+        let r = self.rem();
+        let size = 0.875 * r;
+        let (pad, gap, space) = (0.75 * r, 0.4 * r, 1.0 * r);
+        let widths: Vec<(f32, f32)> = items
+            .iter()
+            .map(|(label, value, widest)| {
+                let l = self.gfx.measure(label, size, 500).0;
+                let v = self.gfx.measure(value, size, 600).0.max(self.gfx.measure(widest, size, 600).0);
+                (l, v)
+            })
+            .collect();
+        let w = 2.0 * pad + widths.iter().map(|(l, v)| l + gap + v).sum::<f32>() + space * (items.len() - 1) as f32;
+        let h = 1.875 * r;
+        if !self.gfx.overlay_begin(w, h, DEEP) {
+            return;
+        }
+        let card = Rect::new(0.0, 0.0, w, h);
+        self.gfx.fill(card, DEEP.alpha(0.86), 0.5 * r);
+        self.gfx.stroke(card.inset(0.5), LINE, 0.5 * r, 1.0);
+        // Capitals centred: a line's first baseline is 1.08 em down, capitals 0.7 em high.
+        let y = h / 2.0 - 0.73 * size;
+        let mut x = pad;
+        for ((label, value, _), (lw, vw)) in items.iter().zip(&widths) {
+            self.gfx.text(label, x, y, lw + 4.0, size, 500, T2, Align::Left, 0, 0.0);
+            self.gfx.text(value, x + lw + gap, y, vw + 4.0, size, 600, T1, Align::Left, 0, 0.0);
+            x += lw + gap + vw + space;
+        }
+        self.gfx.overlay_end((0.5 * r).round());
+    }
+
     // ---------- Keycaps ----------
 
     fn key_label(&self, k: Key) -> &'static str {
@@ -1368,7 +1424,7 @@ impl App {
 /// A System tile's line under its name. `press`: how to come back ("Press the PS button").
 fn system_desc(key: &str, press: &str) -> String {
     if key == "desktop" {
-        return format!("Shows the Windows desktop. {press} to come back");
+        return format!("Shows the {}desktop. {press} to come back", if cfg!(windows) { "Windows " } else { "" });
     }
     match key {
         "sleep" => "The PC sleeps until you wake it",
@@ -1376,7 +1432,8 @@ fn system_desc(key: &str, press: &str) -> String {
         "shutdown" => "Turns the PC off",
         "quit" => "Closes Sofa completely",
         "bigpicture" => "Opens Steam in Big Picture mode",
-        "settings" => "Start with Windows, buttons, browser and sounds",
+        "settings" if cfg!(windows) => "Start with Windows, buttons, browser and sounds",
+        "settings" => "Start when you sign in, buttons, browser and sounds",
         "rescan" => "Looks for newly installed games and apps",
         "display" => "Resolution, HDR and scaling",
         "sound" => "TV, headphones or the controller",
@@ -1428,6 +1485,7 @@ fn civil_from_days(z: i64) -> (i64, usize) {
 }
 
 /// Today's date in the person's own long format ("Friday, November 27, 2026").
+#[cfg(windows)]
 fn date_text() -> String {
     use windows::Win32::Globalization::{DATE_LONGDATE, GetDateFormatEx};
     let mut buf = [0u16; 128];
@@ -1437,6 +1495,7 @@ fn date_text() -> String {
 }
 
 /// The time `minutes` from now, in the person's own format ("11:42 PM").
+#[cfg(windows)]
 fn clock_in(minutes: u32) -> String {
     use windows::Win32::Globalization::{GetTimeFormatEx, TIME_NOSECONDS};
     use windows::Win32::System::SystemInformation::GetLocalTime;
@@ -1451,6 +1510,7 @@ fn clock_in(minutes: u32) -> String {
 }
 
 /// The time in the person's own format, without seconds.
+#[cfg(windows)]
 fn clock_text() -> String {
     use windows::Win32::Globalization::{GetTimeFormatEx, TIME_NOSECONDS};
     let mut buf = [0u16; 64];
@@ -1458,3 +1518,6 @@ fn clock_text() -> String {
     let n = unsafe { GetTimeFormatEx(windows::core::PCWSTR::null(), TIME_NOSECONDS, None, windows::core::PCWSTR::null(), Some(&mut buf)) };
     String::from_utf16_lossy(&buf[..(n.max(1) - 1) as usize])
 }
+
+#[cfg(target_os = "linux")]
+use crate::linux::clock::{clock_in, clock_text, date_text};

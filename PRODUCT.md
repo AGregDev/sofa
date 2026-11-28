@@ -2,13 +2,15 @@
 
 ## What it is
 
-Sofa turns a Windows gaming PC on the TV into something that feels like a console.
+Sofa turns a gaming PC on the TV into something that feels like a console, on Windows
+and, since 2.3, on Linux.
 It is a full-screen home screen for the couch: every Steam game, RecompLauncher
 port, streaming service and Start menu app on one screen, driven entirely from a
 controller. Windows stays out of sight until you choose to leave.
 
-Since 2.0 Sofa is one native executable (Rust, Direct2D): no browser engine and no
-helper processes, so the home screen itself costs almost nothing while you play.
+Since 2.0 Sofa is one native executable (Rust; Direct2D on Windows, an X11 window drawn
+on the CPU on Linux): no browser engine and no helper processes, so the home screen itself
+costs almost nothing while you play.
 
 ## Who it is for
 
@@ -35,7 +37,7 @@ to start a game or switch apps.
    comes from the games' own art. No lag while moving, no flicker, no surprises,
    and no memory taken from the game you are playing.
 
-## Features (2.2)
+## Features (2.3)
 
 - Home rows: Running, Discord voice, Jump back in, Favorites, Games, Media, Apps
   (each long row ends with an "All ..." tile). ○ on Home returns to the first tile.
@@ -54,6 +56,12 @@ to start a game or switch apps.
   - **Sleep timer**: 30 min, 1 h, 1 h 30 min, 2 h. A minute before the end Sofa comes
     forward with a countdown (Stay awake, Sleep now); games and videos wait in sleep.
   - **Controller light** and **Power** (sleep, restart, shut down, desktop, quit).
+  - **Performance**: CPU and GPU use, memory and each graphics card's video memory.
+    **Show on screen** keeps them, and the frame rate of the game in front, in a one-line
+    overlay in the top left corner, a window of its own over every game and app (not over
+    exclusive full screen). Read only while they show. The frame rate needs Windows'
+    Performance Log Users group, as Game Bar's does: Sofa offers to ask Windows once, and it
+    counts from the next sign-in. DirectX 9 to 12 games; Vulkan and OpenGL show none yet.
   - ≡ opens Settings from here.
 - Running cards name the program itself (Firefox, not the page it shows) with its
   own icon; the page or document shows beside "Running" in the hero.
@@ -115,6 +123,66 @@ native replacement for something the browser engine gave for free.
   and apps from their options.
 - The longer 1.x setup (controller check, Windows settings worth changing).
 
+## Linux (2.3)
+
+The same program for Linux: one AppImage, `Sofa-Setup-<version>-x86_64.AppImage`, that
+installs itself for the person (`~/.local/bin/sofa`, a desktop entry with an Uninstall
+action, start with the session) with no root, or a build from source. Aimed first at Ubuntu
+and Debian with GNOME, and at Arch-based systems, KDE and other window managers; X11 sessions
+and Wayland sessions with XWayland (every GNOME and KDE session has it). Built on Ubuntu 20.04,
+so glibc 2.31 or later.
+
+**Works as on Windows**
+- Home, sections, search with the on-screen keyboard and Paste, item options, settings, the
+  first-run screen, the quick menu, the sleep timer, Sleep, Restart, Shut down (systemd).
+- Performance and its overlay (override-redirect, over every window); GPU use and video memory
+  from NVIDIA's driver (NVML) and from amdgpu, none for other cards (Intel's, nouveau).
+- Every pad through evdev, read whichever window has the focus: DualSense, Xbox and other
+  xpad pads, Switch Pro; the PS (Guide) button brings Sofa forward from inside a game with that
+  game first, and ✕ hands it back once the button is up. The keyboard works too.
+- Steam games from a native, Flatpak or Snap Steam, with art, last played and play time;
+  desktop apps from their desktop entries (Flatpak and Snap apps included) with icons from the
+  icon theme; streaming in Edge, Chrome, Chromium or Firefox with Sofa's own profile (also when
+  the browser is a Snap or a Flatpak), and the controller as YouTube's remote.
+- Running cards with the program's name and icon, close and force close, picking an open app
+  switches to it; Steam pushed back down when it grabs the screen after PS; Steam's "Guide
+  button focuses Steam" turned off as on Windows.
+- Now playing from the desktop's media players (MPRIS); sound outputs (the TV by its own name),
+  volume and the microphone through PulseAudio or PipeWire (`pactl`); Discord voice through
+  Discord's socket (package, Flatpak or Snap); Spotify, its sign-in sealed with a key only the
+  person's account can read (`~/.config/sofa/key`).
+- The DualSense's battery; its lightbar, player light, mute LED and mute button when its
+  hidraw device may be opened (Steam's udev rules, the `steam-devices` package).
+- Settings in `~/.config/sofa/sofa.json`, with the same keys as on Windows.
+
+**Not on Linux yet**
+- **Wayland apps.** Sofa is an X11 window, and under Wayland X11 sees only X11 windows (Steam,
+  Proton and most SDL games, and the browsers Sofa starts, which it starts on X11). An app
+  that draws through Wayland itself (GNOME's own apps, a browser started outside Sofa) gets no
+  Running card, and PS over it opens Sofa without it first. GNOME offers no other way without a
+  Shell extension; a small extension of Sofa's own is the planned fix.
+- **The guard.** A desktop or panel window coming forward brings Sofa back; GNOME's Activities
+  overview and other Wayland surfaces cannot be seen, so they do not.
+- **Ctrl+Alt+H** from anywhere; the PS button and the Home key work.
+- **Holding back other programs' synthetic keys** (Steam's desktop layout turning ○ into a
+  key). X11 cannot drop them, so a key that arrives while a pad button is down counts as that
+  press instead.
+- **The DualSense without Steam's udev rules**: no lights and no mute button (the kernel keeps
+  the mute button to itself); everything else works.
+- **The frame rate in the performance overlay.** Windows tells Sofa the frames a game presents;
+  nothing on Linux tells one program another's (MangoHud draws inside the game instead).
+- RecompLauncher (a Windows launcher) and the Game Bar setting (Windows only).
+- **gamescope and the Steam Deck's Game Mode**: gamescope decides which app is in front; Sofa
+  runs in desktop sessions.
+- **Fractional scaling under Wayland** (125 %, 150 %): XWayland windows are scaled up and look
+  soft. 100 % or 200 % keeps Sofa sharp.
+- Sofa draws on the CPU here: smooth at 1080p; on a 4K screen at 100 % scaling its animations
+  cost more CPU than on Windows.
+
+**Needs** X11 or XWayland, FUSE to run the AppImage (or `--appimage-extract-and-run`),
+`pactl` for the sound controls, fontconfig for characters Figtree lacks (CJK titles), and
+`zenity` or `kdialog` for the uninstall question.
+
 ## Deliberately not in Sofa
 
 - **Steam friends.** Steam's Web API needs a personal key and a public friends
@@ -135,7 +203,8 @@ native replacement for something the browser engine gave for free.
   setting is on. Sofa turns that setting off itself: silently while Steam is closed,
   or after asking while Steam is open, because Steam must restart to pick it up.
   Until then Sofa pushes Steam back down whenever it grabs the screen.
-- **Windows only.** Sofa is built on Win32, Direct2D and DirectWrite.
+- **Windows and Linux only.** Sofa is built on Win32, Direct2D and DirectWrite on Windows, and
+  on X11 (EWMH), evdev and freedesktop.org's interfaces on Linux (see "Linux (2.3)").
 - **Unsigned.** SmartScreen warns on first run until the file has a reputation.
 
 ## Quality bar

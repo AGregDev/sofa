@@ -1,6 +1,8 @@
 //! Sofa's library: Steam games, RecompLauncher ports, Start menu apps, streaming services and
 //! system actions, each sorted into a category. A port of `src/library.js` that reads Steam's
-//! files through the verified `vdf-rs` port.
+//! files through the verified `vdf-rs` port. On Linux the Start menu is the desktop entries
+//! (`linux/startmenu.rs` writes the same `cache/startmenu.json`) and Steam is the native,
+//! Flatpak or Snap one.
 
 use regex::Regex;
 use serde_json::Value;
@@ -24,6 +26,8 @@ pub struct Art {
 pub enum Launch {
     Url(String),
     AppsFolder(String),
+    /// A program and its arguments (RecompLauncher's games, Windows only so far).
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     Exec { exe: PathBuf, args: Vec<String> },
     Web { url: Option<String>, tv: bool },
     System { action: String, uri: Option<String> },
@@ -70,6 +74,25 @@ fn text_field(o: &Value, key: &str) -> Option<String> {
 
 // ---------- Steam ----------
 
+/// Steam's folder on Linux: the native client's, the Flatpak's or the Snap's, whichever has a
+/// library.
+#[cfg(target_os = "linux")]
+pub fn steam_root() -> Option<PathBuf> {
+    let home = crate::linux::home();
+    [
+        home.join(".local/share/Steam"),
+        home.join(".steam/steam"),
+        home.join(".steam/root"),
+        home.join(".var/app/com.valvesoftware.Steam/.local/share/Steam"),
+        home.join(".var/app/com.valvesoftware.Steam/.steam/steam"),
+        home.join("snap/steam/common/.local/share/Steam"),
+    ]
+    .into_iter()
+    .filter_map(|p| std::fs::canonicalize(p).ok())
+    .find(|p| p.join("steamapps").is_dir())
+}
+
+#[cfg(windows)]
 pub fn steam_root() -> Option<PathBuf> {
     use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_SZ, RegGetValueW};
     use windows::core::w;
@@ -199,6 +222,7 @@ fn scan_steam(root: &Path) -> Vec<Item> {
 
 // ---------- RecompLauncher ----------
 
+#[cfg(windows)]
 const RECOMP_TITLES: [(&str, &str); 10] = [
     ("longshot", "The Legend of Zelda: Ocarina of Time"),
     ("shipwright", "The Legend of Zelda: Ocarina of Time"),
@@ -212,6 +236,13 @@ const RECOMP_TITLES: [(&str, &str); 10] = [
     ("unleashedrecomp", "Sonic Unleashed"),
 ];
 
+/// RecompLauncher is a Windows launcher.
+#[cfg(target_os = "linux")]
+fn scan_recomp(_cache: &Path) -> Vec<Item> {
+    Vec::new()
+}
+
+#[cfg(windows)]
 fn scan_recomp(cache: &Path) -> Vec<Item> {
     let env = |k: &str| std::env::var_os(k).map(PathBuf::from).unwrap_or_default();
     let data = env("APPDATA").join("com.recomplauncher.app");
@@ -334,8 +365,9 @@ pub fn categorize_start(name: &str, app_id: &str) -> &'static str {
 }
 
 /// Start menu apps as Sofa last listed them (`cache\startmenu.json`, from `startmenu::scan`;
-/// before the first scan finishes, Sofa 1.x's `cache\startapps.json`).
-fn start_apps(cache: &Path) -> Vec<(String, String, Option<PathBuf>)> {
+/// before the first scan finishes, Sofa 1.x's `cache\startapps.json`), with the category a
+/// desktop entry gives itself (Linux only).
+fn start_apps(cache: &Path) -> Vec<(String, String, Option<PathBuf>, Option<String>)> {
     let text = std::fs::read_to_string(cache.join("startmenu.json")).or_else(|_| std::fs::read_to_string(cache.join("startapps.json")));
     let Ok(text) = text else { return vec![] };
     let Ok(Value::Array(list)) = serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) else { return vec![] };
@@ -344,7 +376,8 @@ fn start_apps(cache: &Path) -> Vec<(String, String, Option<PathBuf>)> {
             let name = a.get("name")?.as_str()?.to_owned();
             let id = a.get("appId")?.as_str()?.to_owned();
             let icon = a.get("icon").and_then(Value::as_str).map(PathBuf::from).filter(|p| p.exists());
-            Some((name, id, icon))
+            let category = a.get("category").and_then(Value::as_str).map(str::to_owned);
+            Some((name, id, icon, category))
         })
         .collect()
 }
@@ -382,7 +415,7 @@ pub fn build(cache: &Path, overrides: &serde_json::Map<String, Value>, recent: &
     items.extend(scan_recomp(cache));
     let game_paths: Vec<String> = items.iter().filter_map(|i| i.install_path.clone()).collect();
     let mut seen_names = HashSet::new();
-    for (name, id, icon) in start_apps(cache) {
+    for (name, id, icon, hint) in start_apps(cache) {
         let lid = id.to_lowercase();
         // Sofa's own shortcut: Sofa is already open.
         if lid.starts_with("steam:") || lid.ends_with("\\sofa.exe") || game_paths.iter().any(|p| lid.starts_with(p.as_str())) {
@@ -392,9 +425,14 @@ pub fn build(cache: &Path, overrides: &serde_json::Map<String, Value>, recent: &
         if !seen_names.insert(name.to_lowercase()) {
             continue;
         }
+        // A desktop entry's own category (Game, AudioVideo) sorts what the names do not.
+        let category = match (categorize_start(&name, &id), hint.as_deref()) {
+            ("apps", Some(h)) => h.to_owned(),
+            (c, _) => c.to_owned(),
+        };
         items.push(Item {
             id: format!("start:{id}"),
-            category: categorize_start(&name, &id).into(),
+            category,
             name,
             source: "start",
             launch: Launch::AppsFolder(id),
@@ -505,7 +543,7 @@ pub fn identify(items: &[Item], exe: &str) -> Option<usize> {
         ("{F38BF404-1D43-42F2-9305-67DE0B28FC23}", windir.clone()),
     ];
     for (i, it) in items.iter().enumerate() {
-        if it.install_path.as_ref().is_some_and(|p| e.starts_with(&format!("{p}\\"))) {
+        if it.install_path.as_ref().is_some_and(|p| e.starts_with(&format!("{p}{}", std::path::MAIN_SEPARATOR))) {
             return Some(i);
         }
         let Launch::AppsFolder(id) = &it.launch else { continue };

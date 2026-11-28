@@ -7,6 +7,10 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../assets/icon.ico");
+    // Only Windows executables carry a resource (Linux gets its icon from the desktop entry).
+    if std::env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os != "windows") {
+        return;
+    }
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_default());
     let icon = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default()).join("../assets/icon.ico");
     let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());

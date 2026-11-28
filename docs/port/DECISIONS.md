@@ -114,3 +114,33 @@ which first made Cross do nothing and Circle press Space. Sofa's own synthetic i
 Consequences: YouTube TV keeps its 16:9 menus centred on ultrawide screens (YouTube's own layout);
 video fills the screen. A sign-in made in the old Firefox TV profile is not carried over to the
 new browser profile. The remote needs a real controller to check (QA M13).
+
+## ADR-010: Linux, as an X11 program drawn on the CPU, shipped as an AppImage
+Status: accepted (2026-11-27)
+Context: people asked for Sofa on Linux, first on Ubuntu and Debian with GNOME, also on
+Arch-based systems. A console home screen must bring itself forward when the PS button is
+pressed inside a game, bring the game back, and list what runs. Wayland gives none of that to
+programs (a window may only take the focus with a token from the focused one; GNOME has no
+window API without a Shell extension), while X11 window managers honour EWMH requests from
+pagers, and GNOME and KDE run every X11 program through XWayland: Steam, Proton games and most
+SDL games are X11 windows. Sofa reads controllers globally, reads Steam's files and starts
+programs on the host, which Flatpak's sandbox blocks.
+Decision: the Linux build is the same program, the platform parts behind
+`cfg(target_os = "linux")` and the Windows build left exactly as it was. Sofa opens an X11
+window (winit with X11 forced) and talks EWMH as a pager (`linux/x11.rs`); it draws on the CPU
+with tiny-skia into a softbuffer surface, text in Figtree through swash with a layout that
+copies what DirectWrite does for Sofa (`linux/text.rs`), keeping `gfx`'s API so `view.rs` is
+the same on both. Pads come through evdev (global, so the PS button works over a game), the
+DualSense also through hidraw for its lights and mute button with the same report code
+(`input::dualsense_session`). Apps are desktop entries with icon-theme icons, listed by the
+`--scan` child like the Start menu; Now playing is MPRIS, sound is `pactl`, secrets are sealed
+with AES-GCM under a 0600 key file, HTTPS is rustls. It ships as one AppImage that installs
+itself like the Windows setup file (`~/.local/bin/sofa`, a desktop entry, autostart), built in
+GitHub Actions on Ubuntu 20.04 for glibc 2.31, and attached to each release. Building from
+source stays a plain `cargo build`.
+Consequences: X11 and XWayland sessions on any desktop work; under Wayland, Wayland-native
+windows are invisible to Sofa (no Running card, no app first after PS, a weaker guard), and the
+planned fix is a GNOME Shell extension of Sofa's own. No GPU: smooth at 1080p, more CPU at 4K.
+gamescope (the Steam Deck's Game Mode) is out of scope. The Linux QA run (`qa/qa.sh`, the same
+73 checks) runs under Xvfb in CI; controllers, focus over games and the lights need real
+hardware (QA.md, section 6).

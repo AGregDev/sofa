@@ -6,25 +6,42 @@
 //! - a full-screen app that was in front closing brings Sofa back;
 //! - Steam grabbing the screen right after the PS button is pushed back down;
 //! - the PS button remembers the app it came from, for the Running card.
+//!
+//! The window manager's side is below for Windows; on Linux it is `linux/wm.rs` (EWMH).
 
+#[cfg(target_os = "linux")]
+pub use crate::linux::wm::{alive, close, exe_of, find_window, foreground, is_fullscreen, is_shell, is_steam, kill, minimize, pid, same_program, started, take_foreground_events, title, top_windows, topmost, watch_foreground, window};
+#[cfg(windows)]
 use std::cell::RefCell;
+#[cfg(windows)]
 use windows::Win32::Foundation::*;
+#[cfg(windows)]
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
+#[cfg(windows)]
 use windows::Win32::System::Threading::*;
+#[cfg(windows)]
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::*;
+#[cfg(windows)]
 use windows::core::PWSTR;
 
+/// On Windows nothing in front means the desktop showed; under Wayland it is any Wayland app.
+const NOTHING_IS_SHELL: bool = cfg!(windows);
+
+#[cfg(windows)]
 thread_local! {
     /// Foreground changes reported by the hook, handled by the main loop.
     static FOREGROUND: RefCell<Vec<isize>> = const { RefCell::new(Vec::new()) };
 }
 
+#[cfg(windows)]
 unsafe extern "system" fn on_foreground(_: HWINEVENTHOOK, _: u32, hwnd: HWND, _: i32, _: i32, _: u32, _: u32) {
     FOREGROUND.with(|f| f.borrow_mut().push(hwnd.0 as isize));
 }
 
 /// Asks Windows to tell Sofa whenever another window comes to the front.
+#[cfg(windows)]
 pub fn watch_foreground() {
     // SAFETY: an out-of-context hook delivered on this thread's message loop.
     unsafe {
@@ -32,6 +49,7 @@ pub fn watch_foreground() {
     }
 }
 
+#[cfg(windows)]
 pub fn take_foreground_events() -> Vec<isize> {
     FOREGROUND.with(|f| std::mem::take(&mut *f.borrow_mut()))
 }
@@ -48,6 +66,7 @@ pub struct Window {
 }
 
 /// A program's name from its version resource (FileDescription, else ProductName).
+#[cfg(windows)]
 pub fn describe(exe: &str) -> String {
     use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
     use windows::core::HSTRING;
@@ -124,10 +143,12 @@ pub fn page_title(title: &str, app: &str) -> String {
     t.to_owned()
 }
 
+#[cfg(windows)]
 fn hwnd(h: isize) -> HWND {
     HWND(h as *mut _)
 }
 
+#[cfg(windows)]
 pub fn class_name(h: isize) -> String {
     let mut buf = [0u16; 256];
     // SAFETY: the buffer is passed with its length.
@@ -135,6 +156,7 @@ pub fn class_name(h: isize) -> String {
     String::from_utf16_lossy(&buf[..n.max(0) as usize])
 }
 
+#[cfg(windows)]
 pub fn title(h: isize) -> String {
     let mut buf = [0u16; 512];
     // SAFETY: the buffer is passed with its length.
@@ -142,6 +164,7 @@ pub fn title(h: isize) -> String {
     String::from_utf16_lossy(&buf[..n.max(0) as usize])
 }
 
+#[cfg(windows)]
 pub fn pid(h: isize) -> u32 {
     let mut pid = 0u32;
     // SAFETY: writes into a local.
@@ -150,6 +173,7 @@ pub fn pid(h: isize) -> u32 {
 }
 
 /// The full path of a process's program (empty when Windows does not say).
+#[cfg(windows)]
 pub fn exe_of(pid: u32) -> String {
     // SAFETY: a limited-query handle, closed before returning; the buffer is sized.
     unsafe {
@@ -163,6 +187,7 @@ pub fn exe_of(pid: u32) -> String {
 }
 
 /// When a window's process started (epoch ms): how long a game has been running.
+#[cfg(windows)]
 pub fn started(h: isize) -> Option<f64> {
     // SAFETY: a limited-query handle, closed before returning; the times are locals.
     unsafe {
@@ -176,11 +201,13 @@ pub fn started(h: isize) -> Option<f64> {
     }
 }
 
+#[cfg(windows)]
 fn exe_name(h: isize) -> String {
     let e = exe_of(pid(h)).to_lowercase();
     e.rsplit('\\').next().unwrap_or("").to_owned()
 }
 
+#[cfg(windows)]
 pub fn window(h: isize) -> Window {
     let exe = exe_of(pid(h));
     let app = describe(&exe);
@@ -189,6 +216,7 @@ pub fn window(h: isize) -> Window {
 
 /// The desktop, taskbar, Start menu and Windows Search: the parts of Windows that Sofa stands
 /// in for while it runs.
+#[cfg(windows)]
 pub fn is_shell(h: isize) -> bool {
     if h == 0 {
         return true;
@@ -200,10 +228,12 @@ pub fn is_shell(h: isize) -> bool {
     matches!(exe_name(h).as_str(), "searchhost.exe" | "startmenuexperiencehost.exe" | "shellexperiencehost.exe")
 }
 
+#[cfg(windows)]
 pub fn is_steam(h: isize) -> bool {
     matches!(exe_name(h).as_str(), "steam.exe" | "steamwebhelper.exe")
 }
 
+#[cfg(windows)]
 fn is_fullscreen(h: isize) -> bool {
     // SAFETY: plain queries into local structs.
     unsafe {
@@ -221,11 +251,13 @@ fn is_fullscreen(h: isize) -> bool {
 }
 
 /// The first visible, titled top-level window of a program (`discord.exe`).
+#[cfg(windows)]
 pub fn find_window(exe: &str) -> Option<isize> {
     top_windows().into_iter().find(|&h| exe_name(h) == exe)
 }
 
 /// The visible, titled top-level windows, front to back.
+#[cfg(windows)]
 pub fn top_windows() -> Vec<isize> {
     unsafe extern "system" fn each(h: HWND, l: LPARAM) -> windows::core::BOOL {
         // SAFETY: `l` is the Vec passed below, alive for the whole enumeration.
@@ -244,12 +276,14 @@ pub fn top_windows() -> Vec<isize> {
     all
 }
 
+#[cfg(windows)]
 pub fn alive(h: isize) -> bool {
     // SAFETY: plain queries.
     unsafe { IsWindow(Some(hwnd(h))).as_bool() && IsWindowVisible(hwnd(h)).as_bool() }
 }
 
 /// Asks a window to close, as its own close button would.
+#[cfg(windows)]
 pub fn close(h: isize, sofa: isize) {
     if h != 0 && h != sofa && alive(h) {
         // SAFETY: posting WM_CLOSE to another window.
@@ -260,6 +294,7 @@ pub fn close(h: isize, sofa: isize) {
 }
 
 /// Ends the program behind a window that stopped responding. Never Windows' shared hosts.
+#[cfg(windows)]
 pub fn kill(h: isize) {
     let p = pid(h);
     // SAFETY: plain query.
@@ -277,6 +312,42 @@ pub fn kill(h: isize) {
             let _ = CloseHandle(handle);
         }
     }
+}
+
+/// The window in front (0: none).
+#[cfg(windows)]
+pub fn foreground() -> isize {
+    // SAFETY: plain query.
+    unsafe { GetForegroundWindow() }.0 as isize
+}
+
+#[cfg(windows)]
+pub fn minimize(h: isize) {
+    // SAFETY: minimizing another program's window.
+    unsafe {
+        let _ = ShowWindow(hwnd(h), SW_MINIMIZE);
+    }
+}
+
+/// Sofa topmost, or not. Leaving topmost puts Sofa above every other window; when something
+/// else is in front already, Sofa goes right behind it instead of covering it.
+#[cfg(windows)]
+fn topmost(sofa: isize, on: bool) {
+    let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+    // SAFETY: changing our own window's z-order.
+    unsafe {
+        let _ = SetWindowPos(hwnd(sofa), Some(if on { HWND_TOPMOST } else { HWND_NOTOPMOST }), 0, 0, 0, 0, flags);
+        let fg = GetForegroundWindow();
+        if !on && !fg.is_invalid() && fg.0 as isize != sofa {
+            let _ = SetWindowPos(hwnd(sofa), Some(fg), 0, 0, 0, 0, flags);
+        }
+    }
+}
+
+/// Whether the window `h` belongs to the program `exe` (lower case).
+#[cfg(windows)]
+fn same_program(h: isize, exe: &str) -> bool {
+    exe_of(pid(h)).to_lowercase() == exe
 }
 
 /// What the main loop should do after a foreground change or a tick.
@@ -363,8 +434,7 @@ impl Shell {
     /// Whether the streaming window Sofa started is in front (the controller drives it).
     pub fn media_in_front(&self) -> bool {
         let Some(m) = self.media else { return false };
-        // SAFETY: plain query.
-        let fg = unsafe { GetForegroundWindow() }.0 as isize;
+        let fg = foreground();
         self.cover.is_none() && fg != 0 && alive(m) && (fg == m || pid(fg) == pid(m))
     }
 
@@ -374,7 +444,7 @@ impl Shell {
         let c = self.cover.as_mut()?;
         if fg != 0 && fg != self.sofa && fg != c.checked {
             c.checked = fg;
-            if exe_of(pid(fg)).to_lowercase() == c.exe && c.seen.is_none_or(|(h, _)| h != fg) {
+            if same_program(fg, &c.exe) && c.seen.is_none_or(|(h, _)| h != fg) {
                 c.seen = Some((fg, None));
             }
         }
@@ -396,7 +466,7 @@ impl Shell {
             // A full-screen session: closing it brings Sofa back.
             self.session = Some((h, now));
             self.last_app = Some((h, true));
-            crate::platform::focus(hwnd(h));
+            crate::platform::focus_id(h);
         }
         Some(Event::Ready(ready.unwrap_or(0)))
     }
@@ -408,17 +478,7 @@ impl Shell {
             return;
         }
         self.top = on;
-        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
-        // SAFETY: changing our own window's z-order.
-        unsafe {
-            let _ = SetWindowPos(hwnd(self.sofa), Some(if on { HWND_TOPMOST } else { HWND_NOTOPMOST }), 0, 0, 0, 0, flags);
-            // Leaving topmost puts Sofa above every other window; when something else is
-            // in front already, Sofa goes right behind it instead of covering it.
-            let fg = GetForegroundWindow();
-            if !on && !fg.is_invalid() && fg.0 as isize != self.sofa {
-                let _ = SetWindowPos(hwnd(self.sofa), Some(fg), 0, 0, 0, 0, flags);
-            }
-        }
+        topmost(self.sofa, on);
     }
 
     /// Lets another window come in front of Sofa (resuming an app).
@@ -450,8 +510,7 @@ impl Shell {
 
     /// The PS button. Returns the app that was in front (not Windows' shell, not Sofa).
     pub fn home_pressed(&mut self, now: f64) -> Option<Window> {
-        // SAFETY: plain query.
-        let mut fg = unsafe { GetForegroundWindow() }.0 as isize;
+        let mut fg = foreground();
         // Steam may have answered the button first: the app before it is the one that ran.
         if is_steam(fg) {
             fg = self.last_app.map_or(0, |(h, _)| h);
@@ -481,11 +540,8 @@ impl Shell {
         // launched just now, is Steam answering the PS button: send it back under Sofa.
         let after_home = now - self.home_at < 10_000.0 && fg != self.came_from;
         if (prev == self.sofa || after_home) && now > self.allow_until && is_steam(fg) {
-            // SAFETY: minimizing Steam's window.
-            unsafe {
-                let _ = ShowWindow(hwnd(fg), SW_MINIMIZE);
-            }
-            crate::platform::focus(hwnd(self.sofa));
+            minimize(fg);
+            crate::platform::focus_id(self.sofa);
             out.push(Event::SteamGrab);
             return out;
         }
@@ -510,14 +566,13 @@ impl Shell {
     pub fn tick(&mut self, now: f64, focused: bool) -> Vec<Event> {
         let mut out = Vec::new();
         if self.cover.is_some() {
-            // SAFETY: plain query. The browser may be in front without an event.
-            let fg = unsafe { GetForegroundWindow() }.0 as isize;
+            // The browser may be in front without an event.
+            let fg = foreground();
             out.extend(self.check_cover(fg, now));
         }
         // Nothing in front at all (the app that was closed, or Sofa started in the background):
         // Windows sends no event for that, so check here.
-        // SAFETY: plain query.
-        if !focused && self.guard && !self.desktop && self.shell_since.is_none() && now >= self.idle_retry && unsafe { GetForegroundWindow() }.is_invalid() {
+        if NOTHING_IS_SHELL && !focused && self.guard && !self.desktop && self.shell_since.is_none() && now >= self.idle_retry && foreground() == 0 {
             self.shell_since = Some(now);
             self.idle_retry = now + 5000.0;
         }
@@ -534,8 +589,7 @@ impl Shell {
             && now - t > 600.0
         {
             self.shell_since = None;
-            // SAFETY: plain query.
-            let fg = unsafe { GetForegroundWindow() }.0 as isize;
+            let fg = foreground();
             if is_shell(fg) && self.guard && !self.desktop {
                 out.push(Event::BringBack);
             }

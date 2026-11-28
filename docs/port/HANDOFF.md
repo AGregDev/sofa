@@ -3,16 +3,68 @@
 Where Sofa stands, for the next session. Read [MAP.md](MAP.md) first, then the ADRs it
 points to, then `../../CLAUDE.md`.
 
-## State (2026-11-27, 2.2.2 released)
+## State (2026-11-28, 2.3.0 released)
 
-- Sofa 2.2.2 is the native app only (ADR-008), released from `main` as v2.2.2. It passes the
-  automated QA run (73 checks), `cargo test --workspace` and
+- Sofa 2.3.0 is the native app (ADR-008) for Windows and, new, Linux (ADR-010), released from
+  `main` as v2.3.0 with `Sofa-Setup-2.3.0.exe` and `Sofa-Setup-2.3.0-x86_64.AppImage`. It
+  passes the automated QA run (76 checks) on both, `cargo test --workspace` and
   `cargo clippy --workspace --all-targets` with no warnings. Of the manual checks only M21
-  (Spotify connect, for 2.2.2) and M25 (on the TV, for 2.2.1) were walked; the others were not
-  walked for 2.1.0 to 2.2.2.
+  (Spotify connect, for 2.2.2) and M25 (on the TV, for 2.2.1) were walked; none on Linux
+  hardware.
+- Only the latest release is supported: the GitHub releases before 2.3.0 say they are
+  deprecated, and the README's "Versions" says the same.
 - It installs itself (`Sofa-Setup-<version>.exe`), replaces Sofa 1.x keeping
   `%APPDATA%\sofa`, and uninstalls from Installed apps (`Sofa.exe --uninstall`).
 - The 1.x features still missing are listed in `../../PRODUCT.md`, "Not yet in 2.x".
+
+## Linux (new in 2.3.0)
+
+- Sofa builds and runs on Linux (ADR-010): an X11 window (XWayland under Wayland) drawn with
+  tiny-skia and swash, evdev pads (the PS button works over a game), the DualSense over hidraw
+  for lights and mute, EWMH for focus, Running windows and the Steam push-down, desktop entries
+  for apps, MPRIS, `pactl`, Discord's socket, rustls, sealed secrets. The Windows build is as it
+  was before (the same QA run, clippy clean). Platform code lives in `app/src/linux/`; see CLAUDE.md.
+- CI (`.github/workflows/linux.yml`) builds on Ubuntu 20.04, runs clippy, the tests and the
+  Linux QA run (`qa/qa.sh`, the same 76 checks) under Xvfb, packs
+  `Sofa-Setup-<version>-x86_64.AppImage`, and attaches it to a published release.
+- Not tried on Linux hardware: controllers, PS over a game on GNOME Wayland, Xorg and KDE, the
+  lights, launching, sound, sleep (QA.md, LB2 to LB6 and LM1 to LM18).
+- Gaps, in PRODUCT.md "Linux (2.3)": Wayland-native windows are invisible (a GNOME Shell
+  extension is the fix), the guard sees only desktop and panel windows, no Ctrl+Alt+H, no
+  gamescope, CPU drawing at 4K.
+
+## New in 2.3.0
+
+- **Linux**, above.
+- **Performance** (`perf.rs`, `Ctl::Perf`, `SheetKind::Perf`, `view.rs` `draw_overlay`): in the
+  quick menu, CPU use, memory, and each card's use and video memory. Show on screen
+  (`perfOverlay`) adds the overlay: one line (CPU, GPU, RAM, VRAM of the card with the most,
+  FPS of the program in front) in a window of its own over every program. Windows: a layered,
+  click-through, unowned topmost window (`SofaOverlay`), drawn by the same Direct2D device into
+  a GDI-compatible bitmap and handed over with UpdateLayeredWindow, raised at each read. Linux:
+  an override-redirect, click-through winit window with its own softbuffer surface, raised
+  with XConfigureWindow. Read once a second and only while shown; the quick menu's card reads
+  memory alone, Sofa's own screen is drawn again only when a number on it changed, and the
+  overlay only when its numbers did.
+- Sources: GetSystemTimes and `/proc/stat` for CPU; DXGI's adapters and PDH's
+  `\GPU Adapter Memory(*)\Dedicated Usage` and `\GPU Engine(*)\Utilization Percentage`
+  (summed per engine type, the busiest type taken, as Task Manager does), matched by LUID, on
+  Windows; NVML and amdgpu's `mem_info_vram_*` and `gpu_busy_percent` on Linux. They are
+  opened once on the short-lived `perf` thread (adding the PDH counters takes about half a
+  second; a read after that, under a millisecond).
+- **Frame rate** (`perf::frames`, Windows): an ETW real-time session, "Sofa frame rate", with
+  Microsoft-Windows-DXGI (Present_Start 42, PresentMultiplaneOverlay_Start 55, minus
+  DXGI_PRESENT_TEST) and Microsoft-Windows-D3D9 (Present_Start 1), raw QPC time stamps. It runs
+  only while the overlay is up and never in QA; startup stops one left by a Sofa that was ended.
+  Events arrive up to two seconds late, so a program's rate is the average over the last two
+  seconds of its frames that arrived. Starting it needs Performance Log Users (or an elevated
+  Sofa); `frames::allow` asks Windows with its administrator prompt, as Game Bar does. Chromium
+  apps present from a helper process and get no rate; Vulkan and OpenGL games neither (the
+  DxgKrnl provider would add them). `cargo test --bin sofa frames_are_counted -- --ignored`
+  checks it against whatever presents on the PC. QA U14 to U16.
+- **Builds**: the release profile already had LTO, one code unit, `panic = "abort"` and
+  stripped symbols; Linux builds also target x86-64-v2 (`.cargo/config.toml`).
+- README: installing on Linux, connecting Discord and Spotify step by step, and "Versions".
 
 ## New in 2.2.2
 
@@ -95,6 +147,9 @@ points to, then `../../CLAUDE.md`.
 
 ## Next, in order
 
+0. Linux: walk LB2 to LB6 and LM1 to LM18 on Ubuntu (GNOME, Wayland and Xorg) and on an
+   Arch-based KDE system; then a GNOME Shell extension that lists and activates Wayland windows.
+
 1. Walk the manual checks in QA.md on the TV with a DualSense (M1 to M15) and record them
    (2.1.0 was released before they were walked).
 2. Try the new output reports on a real DualSense over USB and Bluetooth (M16, M17), the
@@ -105,6 +160,11 @@ points to, then `../../CLAUDE.md`.
 4. Custom covers and uninstalling from Sofa (the `cover` override is already read).
 5. Automate D1 to D4: a real Sofa in a window, PS posted as WM_PAD_HOME, then the foreground
    and minimized state checked (how this round's desktop bug was reproduced).
+6. The performance overlay over a real game (M26): its FPS against the game's own counter, and
+   over Sofa when PS brings it back. Then Vulkan and OpenGL frame rates (Microsoft-Windows-
+   DxgKrnl's present events, as PresentMon reads them).
+7. The setup cannot replace a Sofa started as administrator: its taskkill is refused and the
+   copy fails (os error 32, seen for 2.3.0). Say "Quit Sofa, then run the setup again" then.
 
 ## Known issues
 

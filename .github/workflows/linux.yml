@@ -1,0 +1,85 @@
+# The Linux build: clippy, tests, the QA run under Xvfb, and the AppImage. Built on Ubuntu
+# 20.04 (glibc 2.31) so the AppImage runs on Ubuntu 20.04 and later, Debian 11 and later, Arch
+# and the rest. A published release gets Sofa-Setup-<version>-x86_64.AppImage next to the
+# Windows Sofa-Setup-<version>.exe.
+name: Linux
+
+on:
+  push:
+    branches: [main, linux-appimage]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  appimage:
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential file jq procps \
+            xvfb xauth x11-utils fontconfig fonts-dejavu-core \
+            libx11-6 libx11-xcb1 libxcb1 libxcursor1 libxrandr2 libxi6 libxkbcommon0 libxkbcommon-x11-0
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-${{ hashFiles('Cargo.lock') }}
+          restore-keys: linux-
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+      - name: Build
+        run: cargo build --release
+      - name: QA run
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" bash qa/qa.sh target/release/sofa shots/linux
+      - name: AppImage
+        run: bash packaging/linux/build-appimage.sh target/release/sofa dist
+      - name: Smoke test the AppImage
+        run: |
+          app=$(ls dist/*.AppImage)
+          chmod +x "$app"
+          APPIMAGE_EXTRACT_AND_RUN=1 timeout 20 xvfb-run -a "$app" --qa --size 640x360 &
+          sleep 6
+          grep -q 'ready in' "${TMPDIR:-/tmp}/sofa-qa/qa.log"
+          printf 'quit\n' > "${TMPDIR:-/tmp}/sofa-qa/control"
+          wait
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sofa-linux
+          path: |
+            dist/*.AppImage
+            shots/linux/
+
+  release:
+    needs: appimage
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sofa-linux
+      - name: Attach the AppImage to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/*.AppImage --clobber --repo "${{ github.repository }}"

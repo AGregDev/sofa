@@ -3,10 +3,10 @@
 Read PRODUCT.md first: it says what Sofa promises, what is not in 2.0 yet, and what was
 removed on purpose. QA.md lists every check a release must pass.
 
-Sofa is one native Windows executable written in Rust (Direct2D, no web engine). It
-replaced the Electron app in 2.0 (docs/port/DECISIONS.md, ADR-008); the Electron sources
-are in git history and the v1.3.0 release. The port's map and next steps are in
-`docs/port/MAP.md` and `docs/port/HANDOFF.md`.
+Sofa is one native executable written in Rust, with no web engine: Direct2D on Windows, and
+since 2.3 an X11 window drawn on the CPU on Linux (ADR-010). It replaced the Electron app in
+2.0 (docs/port/DECISIONS.md, ADR-008); the Electron sources are in git history and the v1.3.0
+release. The port's map and next steps are in `docs/port/MAP.md` and `docs/port/HANDOFF.md`.
 
 ## Commands
 
@@ -24,6 +24,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File qa\qa.ps1   # automated QA, 
 (`%TEMP%\sofa-native.log`), `--qa` (see below), `--uninstall [--quiet]`, and the internal
 `--scan <cache> [--jobs <file>] [--no-startmenu]` and `--relaunch`. Named
 `Sofa-Setup-*.exe` (anything containing "setup"), the same file installs itself.
+
+Linux (in CI: `.github/workflows/linux.yml`, Ubuntu 20.04 container, every push):
+
+```bash
+cargo build --release                          # target/release/sofa
+target/release/sofa --windowed
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+xvfb-run -a -s "-screen 0 1920x1080x24" bash qa/qa.sh target/release/sofa shots/linux
+bash packaging/linux/build-appimage.sh target/release/sofa dist   # Sofa-Setup-<v>-x86_64.AppImage
+```
+
+From Windows, type-check the Linux build (ring, rustls' cryptography, cannot be compiled
+there, so HTTPS is left out):
+
+```powershell
+cargo clippy --target x86_64-unknown-linux-gnu --no-default-features -p sofa --all-targets
+```
+
+On Linux `--install` installs any build (as a file named `*setup*` does); `--qa` adds a control
+pipe (`$TMPDIR/sofa-qa/control`) that `qa/qa.sh` drives.
 
 ## Layout
 
@@ -45,8 +66,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File qa\qa.ps1   # automated QA, 
 | `app/src/install.rs` | install, start with Windows, Start menu shortcut, Installed apps entry, uninstall, removing Sofa 1.x |
 | `app/src/store.rs` | `%APPDATA%\sofa\sofa.json`, same keys as Sofa 1.x |
 | `app/src/sound.rs` | interface sounds, synthesized once into in-memory WAVs |
+| `app/src/perf.rs` | the Performance panel and overlay: CPU, memory, each card's use and video memory (DXGI and PDH's GPU counters; NVML and amdgpu on Linux, opened once on the short-lived `perf` thread), and games' frame rate from an ETW session (`frames`, Windows, only while the overlay is up) |
 | `app/src/icons.rs` | reads `app/assets/icons.js` (Lucide) and `brand.js` at build time |
-| `app/build.rs` | icon and version resource through windres |
+| `app/src/draw.rs` | what both renderers share: Rect, Color, Fit, the art's tone, SVG path data walked into either renderer's paths |
+| `app/build.rs` | icon and version resource through windres (Windows targets only) |
+| `app/src/linux/` | Linux. Picked in `main.rs` in place of the Windows file: `gfx.rs` (tiny-skia into softbuffer, same API), `platform.rs`, `audio.rs` (`pactl`), `media.rs` (MPRIS over zbus), `install.rs` (AppImage, desktop entry, autostart), `startmenu.rs` (desktop entries, `--scan` only). Shared by those: `app.rs` (winit X11 window, loop, single instance, QA pipe, signals), `text.rs` (Figtree with swash, DirectWrite-like layout), `x11.rs` (EWMH, XTest, clipboard), `wm.rs` (what `shell.rs` asks of the window manager), `pads.rs` (evdev, hidraw), `desktop.rs` (desktop entries, icon themes), `proc.rs` (`/proc`, Wine paths), `net.rs` (ureq + rustls), `secret.rs` (AES-GCM, key file), `pulse.rs` (sounds), `clock.rs` |
+| `qa/qa.sh` | the Linux QA run (the same 76 checks) |
+| `packaging/linux/` | the AppImage's desktop entry and `build-appimage.sh` |
 | `crates/vdf` | Steam's VDF parser, ported with rust-anything (172 recorded cases in `tests/`) |
 | `crates/steam` | turns off "Guide button focuses Steam" in each account's `localconfig.vdf` |
 | `qa/qa.ps1` | the automated QA run |
@@ -54,11 +80,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File qa\qa.ps1   # automated QA, 
 
 ## Rules that keep Sofa working
 
+- **Two systems, one program.** Windows-only code is behind `#[cfg(windows)]`, Linux-only
+  behind `#[cfg(target_os = "linux")]`, and the shared logic (ui, view, shell's `Shell`, input's
+  `Input`, library, social, spotify) calls small functions both sides provide. A change for one
+  system must leave the other's build, tests and QA run as they were: run clippy for both
+  targets. The Windows build stays exactly as it was before Linux (ADR-010).
+- **On Linux Sofa is always an X11 window** (winit with X11 forced; XWayland under Wayland),
+  because only X11 lets a program bring itself and others forward (EWMH, as a pager). Under
+  Wayland only X11 windows can be seen; never treat "no window in front" as the desktop there
+  (`shell::NOTHING_IS_SHELL`). Browsers Sofa starts get `--ozone-platform=x11` (or
+  `MOZ_ENABLE_WAYLAND=0`) and the class `SofaWeb` so Sofa can see and drive them.
 - **QA mode (`--qa`) must never touch the real world.** It uses `%TEMP%\sofa-qa`, its own
-  window class and mutex, no foreground hook, no topmost, no hotkey, and launching,
-  closing, the Steam fix and start with Windows return early. Add the same guard to
+  window class and mutex, no foreground hook, no topmost (the overlay's window included), no
+  hotkey, no ETW session, and launching, closing, the Steam fix and start with Windows return
+  early. Add the same guard to
   anything new with side effects. QA check X1 compares the real settings, Run key, Steam
-  setting, shortcut and Installed apps entry before and after.
+  setting, shortcut and Installed apps entry before and after. On Linux: `$TMPDIR/sofa-qa`,
+  the class `SofaQA` and its own socket, no window-manager watch, no autostart or desktop
+  entry written, no key file; X1 compares `~/.config/sofa`, the autostart and desktop entries,
+  `~/.local/bin/sofa` and Steam's setting.
 - **Draw only when something changed.** `App::animating` decides; the loop otherwise
   sleeps in `MsgWaitForMultipleObjects`. Never redraw on a timer, never move focus under
   the person (rebuilds keep focus by tile id).
@@ -111,7 +151,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File qa\qa.ps1   # automated QA, 
   running game. `shell.rs` still pushes Steam down if it grabs the screen.
 - **Same data as 1.x** (ADR-003): never rename keys in `sofa.json` or move caches. An
   unreadable `sofa.json` is copied to `sofa.json.unreadable` before defaults are written.
-- **Unsafe code** only for Windows calls, each block with a `// SAFETY:` comment.
+- **Unsafe code** only for system calls (Win32, libc, dlopen'd C libraries), each block with a
+  `// SAFETY:` comment.
 
 ## Design rules
 
@@ -121,6 +162,13 @@ tracked labels. Lucide-style 1.5 px line icons. Every hint is a real keycap (`ke
 and the hint bar shows only actions that work on the focused tile. Copy is plain: say what
 happens, no "please", no exclamation marks. Lay out in rem (screen height / 67.5); colours
 and the motion curve are defined once at the top of `ui.rs`.
+
+## Toolchain (Linux)
+
+- Rust stable (1.97 or later) and a C compiler (rustls' `ring`). No `-dev` packages: X11,
+  xkbcommon and libpulse-simple are loaded at run time, so the binary links only glibc.
+- The release build in CI runs on Ubuntu 20.04 (glibc 2.31): a newer build host makes an
+  AppImage that older distributions refuse.
 
 ## Toolchain (Windows, no Visual Studio)
 
@@ -141,6 +189,9 @@ and the motion curve are defined once at the top of `ui.rs`.
 4. `cargo build --release`, copy `sofa.exe` to `dist\Sofa-Setup-<version>.exe`, run it once
    to check the install (B2, B3), then
    `gh release create v<version> "dist\Sofa-Setup-<version>.exe"`.
+5. Publishing the release runs the Linux workflow, which attaches
+   `Sofa-Setup-<version>-x86_64.AppImage` to it. Its QA run must pass; walk LB2 to LB6 and the
+   LM checks on a Linux PC.
 
 ## README media
 

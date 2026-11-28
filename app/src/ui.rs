@@ -31,6 +31,9 @@ pub(crate) const LINE: Color = Color(0.937, 0.914, 0.871, 0.08);
 /// Discord's own colour, for its tiles and the controller light on them.
 pub(crate) const DISCORD: Color = Color::hex(0x5865f2);
 
+/// The setting that starts Sofa with the computer.
+const START_WITH: &str = if cfg!(windows) { "Start Sofa with Windows" } else { "Start Sofa when you sign in" };
+
 /// Sleep timer lengths, in minutes: the quick menu steps through them, then off.
 const TIMER_STEPS: [u32; 4] = [30, 60, 90, 120];
 
@@ -46,7 +49,6 @@ static JOBS: AtomicUsize = AtomicUsize::new(0);
 /// listing and program icons (`startmenu.rs`). Windows' icon code loads many libraries; in a
 /// child they go away when it ends, instead of staying in Sofa's memory. Posts `done` after.
 fn spawn_scan(cache: &std::path::Path, jobs: &[(String, PathBuf)], startmenu: bool, hwnd: isize, done: u32) -> bool {
-    use std::os::windows::process::CommandExt;
     let Ok(exe) = std::env::current_exe() else { return false };
     let file = cache.join(format!("jobs-{}-{}.json", std::process::id(), JOBS.fetch_add(1, Ordering::Relaxed)));
     let list: Vec<Value> = jobs.iter().map(|(e, p)| Value::Array(vec![Value::from(e.as_str()), Value::from(p.to_string_lossy().as_ref())])).collect();
@@ -59,7 +61,22 @@ fn spawn_scan(cache: &std::path::Path, jobs: &[(String, PathBuf)], startmenu: bo
         cmd.arg("--no-startmenu");
     }
     // CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS: never in the way of a game.
-    cmd.creation_flags(0x0800_0000 | 0x0000_4000);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000 | 0x0000_4000);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: only nice(2), which is async-signal-safe, runs between fork and exec.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::nice(10);
+                Ok(())
+            });
+        }
+    }
     let Ok(mut child) = cmd.spawn() else {
         let _ = std::fs::remove_file(&file);
         return false;
@@ -134,6 +151,8 @@ pub(crate) enum Ctl {
     Mic,
     Timer,
     Light,
+    /// Memory, video memory and Sofa's frame rate; the overlay.
+    Perf,
     Power,
 }
 
@@ -146,6 +165,7 @@ impl Ctl {
             Ctl::Mic => "mic",
             Ctl::Timer => "timer",
             Ctl::Light => "light",
+            Ctl::Perf => "perf",
             Ctl::Power => "power",
         }
     }
@@ -364,6 +384,10 @@ pub(crate) enum Act {
     SpForgetNow,
     SpPlay(String, bool),
     SpOpen(String),
+    /// A line that only shows something (the Performance panel's numbers).
+    Info,
+    /// Asks Windows to let Sofa watch frames (Performance Log Users), for the overlay's rate.
+    AllowFrames,
 }
 
 #[derive(Clone)]
@@ -414,6 +438,8 @@ pub(crate) enum SheetKind {
     Sound,
     /// Sleep, restart, shut down, from the quick menu.
     Power,
+    /// Memory, video memory and the frame rate, from the quick menu.
+    Perf,
     /// Connect Spotify, its account, and a playlist's or album's options.
     SpSetup,
     SpAccount,
@@ -537,6 +563,14 @@ pub struct App {
     pub(crate) sp_id: String,
     /// Spotify changed while a menu was open: Home and Music rebuild when it closes.
     music_stale: bool,
+    /// What the Performance panel and the overlay show, and when it was read.
+    pub(crate) perf: Option<crate::perf::Usage>,
+    perf_at: f64,
+    /// The numbers last shown, so the screen is drawn again only when one changes.
+    perf_shown: String,
+    /// The frame rate of the program in front, for the overlay, and whether frames are watched.
+    pub(crate) fps: Option<u32>,
+    frames_on: bool,
     /// An Xbox (XInput) pad was connected this run: Game Bar's use of its button is offered.
     pub(crate) xbox: bool,
 }
@@ -633,6 +667,11 @@ impl App {
             music,
             sp_id: String::new(),
             music_stale: false,
+            perf: None,
+            perf_at: -1e9,
+            perf_shown: String::new(),
+            fps: None,
+            frames_on: false,
             xbox,
             tab: "home".into(),
             rows: Vec::new(),
@@ -1166,6 +1205,8 @@ impl App {
         let since = self.running.iter().find(|r| r.win.hwnd == w.hwnd).and_then(|r| r.since).or_else(|| shell::started(w.hwnd));
         self.running.retain(|r| r.win.hwnd != w.hwnd && (item.is_none() || r.item != item));
         let icon = (item.is_none() && !w.exe.is_empty()).then(|| library::icon_cache(&self.cache, std::path::Path::new(&w.exe)));
+        #[cfg(target_os = "linux")]
+        let icon = icon.map(|png| crate::linux::wm::running_icon(&w, png, self.qa));
         if let Some(png) = &icon
             && !png.exists()
             && !self.qa
@@ -1230,7 +1271,7 @@ impl App {
         crate::log(&format!("resume {h:#x} after {:.0} ms", now - at));
         if !self.qa && self.run_of(h).is_some() {
             self.shell.hand_off();
-            platform::focus(windows::Win32::Foundation::HWND(h as *mut _));
+            platform::focus_id(h);
         }
         crate::log(&self.state_line());
     }
@@ -1286,11 +1327,16 @@ impl App {
     /// The open window of a library item that has no Running card: an app's own program, or a
     /// program in a game's folder.
     fn window_of(&self, it: &Item) -> Option<isize> {
+        // A desktop entry: the window of the program it starts.
+        #[cfg(target_os = "linux")]
+        if let Launch::AppsFolder(id) = &it.launch {
+            return crate::linux::desktop::window_for(std::path::Path::new(id));
+        }
         if let Launch::AppsFolder(id) = &it.launch {
             let name = std::path::Path::new(id).file_name().map(|n| n.to_string_lossy().to_lowercase()).filter(|n| n.ends_with(".exe"))?;
             return shell::find_window(&name);
         }
-        let dir = format!("{}\\", it.install_path.as_ref()?);
+        let dir = format!("{}{}", it.install_path.as_ref()?, std::path::MAIN_SEPARATOR);
         shell::top_windows().into_iter().find(|&h| h != self.shell.sofa && shell::exe_of(shell::pid(h)).to_lowercase().starts_with(&dir))
     }
 
@@ -1328,7 +1374,7 @@ impl App {
             self.layers.push(Layer::Launch { item: i, at: now });
         } else {
             self.shell.set_top(self.focused);
-            self.toast(&format!("Couldn't open {}", it.name), "Windows didn't start it.");
+            self.toast(&format!("Couldn't open {}", it.name), if cfg!(windows) { "Windows didn't start it." } else { "It didn't start. Try it from the desktop." });
         }
     }
 
@@ -1377,10 +1423,7 @@ impl App {
         }
         self.shell.desktop = true;
         self.shell.hand_off();
-        // SAFETY: minimizing our own window.
-        unsafe {
-            let _ = windows::Win32::UI::WindowsAndMessaging::ShowWindow(self.gfx.hwnd(), windows::Win32::UI::WindowsAndMessaging::SW_MINIMIZE);
-        }
+        shell::minimize(self.shell.sofa);
     }
 
     // ---------- Layers ----------
@@ -1478,7 +1521,7 @@ impl App {
         let browser = platform::chosen_browser(self.store.text("browser")).map_or("None found", |b| b.name);
         let autostart = if self.qa { self.store.flag("launchAtLogin") } else { install::autostart() };
         let mut opts = vec![
-            Opt::new("Start Sofa with Windows", Act::Toggle("launchAtLogin")).switch(autostart),
+            Opt::new(START_WITH, Act::Toggle("launchAtLogin")).switch(autostart),
             Opt::new("Keep Sofa in front", Act::Toggle("keepInFront")).switch(self.store.flag("keepInFront")),
             Opt::new("Home button", Act::HomeButton).value(self.home_name()),
             Opt::new("Button layout", Act::Layout).value(self.layout_name()),
@@ -1516,7 +1559,7 @@ impl App {
 
     fn welcome_opts(&self) -> Vec<Opt> {
         let mut opts = vec![
-            Opt::new("Start Sofa with Windows", Act::Toggle("launchAtLogin")).switch(self.store.flag("launchAtLogin")),
+            Opt::new(START_WITH, Act::Toggle("launchAtLogin")).switch(self.store.flag("launchAtLogin")),
             Opt::new(format!("Keep Steam off the {}", self.guide_name()), Act::Toggle("steamGuide")).switch(self.store.flag("steamGuide")),
         ];
         if self.xbox && !self.qa {
@@ -1961,6 +2004,18 @@ impl App {
                 self.toggle(key, now);
                 self.refresh_settings();
                 self.refresh_welcome();
+                if key == "perfOverlay" {
+                    self.read_perf(now, true);
+                }
+            }
+            Act::Info => sound::play(Sound::Edge),
+            Act::AllowFrames => {
+                // A QA run asks Windows nothing.
+                if !self.qa && crate::perf::allow_frames() {
+                    self.toast("Sign out and back in", "Then the frame rate shows over games.");
+                } else {
+                    sound::play(Sound::Edge);
+                }
             }
             Act::HomeButton => {
                 let next = if self.store.text("homeButton") == "combo" { "ps" } else { "combo" };
@@ -1987,7 +2042,7 @@ impl App {
                     self.audio.current = Some(id);
                     self.audio_refresh();
                 } else {
-                    self.toast("Couldn't switch the sound", "Windows didn't accept that output. Try it in Windows' sound settings.");
+                    self.toast("Couldn't switch the sound", if cfg!(windows) { "Windows didn't accept that output. Try it in Windows' sound settings." } else { "The sound server didn't accept that output. Try it in the sound settings." });
                 }
             }
             Act::System(key) => {
@@ -2273,6 +2328,11 @@ impl App {
             self.minute = minute;
             self.dirty = true;
         }
+        // The Performance panel, its card and the overlay show numbers read once a second.
+        let perf_up = self.store.flag("perfOverlay") || self.layers.iter().any(|l| matches!(l, Layer::Quick { .. } | Layer::Sheet { kind: SheetKind::Perf, .. }));
+        if perf_up {
+            self.read_perf(now, false);
+        }
         self.watch_pads(now);
         self.resume_tick(now);
         self.sleep_tick(now);
@@ -2309,7 +2369,7 @@ impl App {
             Some(Layer::Quick { focus, .. }) => format!("quick:{}", focus.key()),
         };
         format!(
-            "state|tab={}|focus={},{}|tile={}|layer={}|rows={}|items={}|running={}|toast={}|sleep={}|volume={}|output={}|mic={}|music={}|resume={}|rowkeys={}",
+            "state|tab={}|focus={},{}|tile={}|layer={}|rows={}|items={}|running={}|toast={}|sleep={}|volume={}|output={}|mic={}|music={}|resume={}|overlay={}|rowkeys={}",
             self.tab,
             self.focus.0,
             self.focus.1,
@@ -2329,6 +2389,7 @@ impl App {
                 (None, Some(h)) => format!("done:{h}"),
                 (None, None) => "-".to_owned(),
             },
+            if self.gfx.overlay_shown() { "on" } else { "off" },
             self.rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>().join(",")
         )
     }
@@ -2338,11 +2399,17 @@ impl App {
     }
 }
 
+#[cfg(windows)]
 pub(crate) fn clock_minute() -> u16 {
     use windows::Win32::System::SystemInformation::GetLocalTime;
     // SAFETY: plain call.
     let t = unsafe { GetLocalTime() };
     t.wHour * 60 + t.wMinute
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn clock_minute() -> u16 {
+    crate::linux::clock::minute_of_day()
 }
 
 impl App {
@@ -2365,19 +2432,38 @@ impl App {
     /// A controller action while the streaming window is in front: the remote's key
     /// (✕ select, ○ back, D-pad and stick move, □ play/pause, L2/R2 volume).
     pub fn remote_action(&mut self, a: Action) {
-        use windows::Win32::UI::Input::KeyboardAndMouse::*;
-        let vk = match a {
-            Action::Up => VK_UP,
-            Action::Down => VK_DOWN,
-            Action::Left => VK_LEFT,
-            Action::Right => VK_RIGHT,
-            Action::Accept => VK_RETURN,
-            Action::Back => VK_ESCAPE,
-            Action::Search => VK_MEDIA_PLAY_PAUSE,
-            Action::VolUp | Action::VolDown => return volume(a == Action::VolUp),
-            _ => return,
-        };
-        send_key(vk.0);
+        #[cfg(windows)]
+        {
+            use windows::Win32::UI::Input::KeyboardAndMouse::*;
+            let vk = match a {
+                Action::Up => VK_UP,
+                Action::Down => VK_DOWN,
+                Action::Left => VK_LEFT,
+                Action::Right => VK_RIGHT,
+                Action::Accept => VK_RETURN,
+                Action::Back => VK_ESCAPE,
+                Action::Search => VK_MEDIA_PLAY_PAUSE,
+                Action::VolUp | Action::VolDown => return volume(a == Action::VolUp),
+                _ => return,
+            };
+            send_key(vk.0);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // X11 keysyms: arrows, Return, Escape, XF86AudioPlay.
+            let sym = match a {
+                Action::Up => 0xff52,
+                Action::Down => 0xff54,
+                Action::Left => 0xff51,
+                Action::Right => 0xff53,
+                Action::Accept => 0xff0d,
+                Action::Back => 0xff1b,
+                Action::Search => 0x1008_ff14,
+                Action::VolUp | Action::VolDown => return volume(a == Action::VolUp),
+                _ => return,
+            };
+            crate::linux::x11::send_key(sym);
+        }
     }
 }
 
@@ -2431,11 +2517,11 @@ impl App {
             self.dc_authorizing = true;
             self.shell.hand_off();
             if let Some(h) = shell::find_window("discord.exe") {
-                platform::focus(windows::Win32::Foundation::HWND(h as *mut _));
+                platform::focus_id(h);
             }
         } else if !self.voice.authorizing && self.dc_authorizing {
             self.dc_authorizing = false;
-            platform::focus(windows::Win32::Foundation::HWND(self.shell.sofa as *mut _));
+            platform::focus_id(self.shell.sofa);
         }
         if self.dc.waiting && !self.voice.busy && !self.voice.authorizing {
             self.dc.waiting = false;
@@ -2792,6 +2878,7 @@ impl App {
         if self.qa || self.input.info().connected {
             v.push(Ctl::Light);
         }
+        v.push(Ctl::Perf);
         v.push(Ctl::Power);
         v
     }
@@ -2823,12 +2910,115 @@ impl App {
                 None => face("timer", "Sleep timer", "Off".into(), false, "Start"),
             },
             Ctl::Light => face("lightbulb", "Controller light", self.light_name().into(), false, "Change"),
+            Ctl::Perf => face("gauge", "Performance", self.perf_card(), self.store.flag("perfOverlay"), "Open"),
             Ctl::Power => face("shutdown", "Power", String::new(), false, "Open"),
         }
     }
 
+    /// Reads CPU use and memory again (at most once a second), and the cards' use and video
+    /// memory with them while the Performance panel or the overlay is up. The open panel and the
+    /// overlay follow, drawn again only when a number on them changed; the overlay is raised
+    /// above every window at each read, and Sofa's own screen is not drawn for it.
+    fn read_perf(&mut self, now: f64, force: bool) {
+        if !force && now - self.perf_at < 1000.0 {
+            return;
+        }
+        let overlay = self.store.flag("perfOverlay");
+        // Frames are watched only while the overlay is up, and never in a QA run.
+        let frames = overlay && !self.qa;
+        if frames != self.frames_on {
+            crate::perf::watch_frames(frames);
+            self.frames_on = frames;
+        }
+        let panel = self.layers.iter().any(|l| matches!(l, Layer::Sheet { kind: SheetKind::Perf, .. }));
+        let video = overlay || panel;
+        let usage = crate::perf::read(video);
+        // Video memory is still being opened (on its own thread, for half a second or so): look
+        // again soon instead of in a second.
+        self.perf_at = if video && usage.gpus.is_none() { now - 800.0 } else { now };
+        self.perf = Some(usage);
+        self.fps = if overlay { crate::perf::frame_rate() } else { None };
+        let opts = self.perf_opts();
+        // What is on screen: the quick menu's card, the panel's numbers and the overlay's.
+        let mut shown = self.perf_card();
+        if video {
+            for text in opts.iter().flat_map(|o| [o.value.as_deref(), o.detail.as_deref()]).flatten() {
+                shown.push('|');
+                shown.push_str(text);
+            }
+            shown.push_str(&format!("|{:?}", self.fps));
+        }
+        let changed = force || shown != self.perf_shown;
+        if !overlay {
+            self.gfx.overlay_hide();
+        } else if changed || !self.gfx.overlay_shown() {
+            self.draw_overlay();
+        } else {
+            self.gfx.overlay_raise();
+        }
+        if !changed {
+            return;
+        }
+        self.perf_shown = shown;
+        for l in &mut self.layers {
+            if let Layer::Sheet { opts: o, kind: SheetKind::Perf, .. } = l {
+                *o = opts.clone();
+            }
+        }
+        if panel || self.layers.iter().any(|l| matches!(l, Layer::Quick { .. })) {
+            self.dirty = true;
+        }
+    }
+
+    /// The quick menu card's value: "38% memory".
+    fn perf_card(&self) -> String {
+        self.perf.as_ref().filter(|u| u.ram_total > 0).map_or_else(String::new, |u| format!("{}% memory", crate::perf::percent(u.ram_used, u.ram_total)))
+    }
+
+    /// The panel: the overlay's switch, CPU use, memory, then each card's use and video memory.
+    fn perf_opts(&self) -> Vec<Opt> {
+        let mut opts = vec![Opt::new("Show on screen", Act::Toggle("perfOverlay")).icon("gauge").switch(self.store.flag("perfOverlay"))];
+        let Some(u) = &self.perf else { return opts };
+        opts.push(Opt::new("CPU", Act::Info).value(u.cpu.map_or_else(|| "Reading".to_owned(), |c| format!("{c}%"))));
+        if u.ram_total > 0 {
+            opts.push(Opt::new("Memory", Act::Info).value(format!("{}, {}%", crate::perf::of(u.ram_used, u.ram_total), crate::perf::percent(u.ram_used, u.ram_total))));
+        }
+        match &u.gpus {
+            None => opts.push(Opt::new("GPU", Act::Info).value("Reading")),
+            Some(gpus) if gpus.is_empty() => opts.push(Opt::new("GPU", Act::Info).value("Not reported")),
+            Some(gpus) => {
+                for g in gpus {
+                    let memory = match g.used {
+                        Some(used) => format!("{}, {}%", crate::perf::of(used, g.total), crate::perf::percent(used, g.total)),
+                        None => format!("{} in all", crate::perf::gb(g.total)),
+                    };
+                    match g.busy {
+                        Some(busy) => {
+                            opts.push(Opt::new("GPU", Act::Info).detail(g.name.clone()).value(format!("{busy}%")));
+                            opts.push(Opt::new("Video memory", Act::Info).value(memory));
+                        }
+                        None => opts.push(Opt::new("Video memory", Act::Info).detail(g.name.clone()).value(memory)),
+                    }
+                }
+            }
+        }
+        // Windows lets Sofa watch frames only in Performance Log Users (as Game Bar asks).
+        if crate::perf::frames_allowed() == Some(false) {
+            opts.push(Opt::new("Frame rate in games", Act::AllowFrames).detail("Windows asks once. It shows after you sign in again.").value("Allow"));
+        }
+        opts
+    }
+
+    fn perf_sheet(&mut self, now: f64) {
+        sound::play(Sound::Open);
+        self.layers.push(Layer::Sheet { title: "Performance".into(), sub: "What this PC is using now. Show on screen keeps it over games and apps.".into(), opts: Vec::new(), focus: 0, kind: SheetKind::Perf });
+        // Read with the panel open, so the cards are read too; this fills the panel.
+        self.read_perf(now, true);
+    }
+
     fn quick_menu(&mut self, now: f64) {
         self.audio_refresh();
+        self.read_perf(now, true);
         let focus = self.quick_ctls()[0];
         sound::play(Sound::Open);
         self.layers.push(Layer::Quick { focus, at: now });
@@ -2903,6 +3093,7 @@ impl App {
             }
             Ctl::Timer => self.cycle_timer(),
             Ctl::Light => self.cycle_light(),
+            Ctl::Perf => self.perf_sheet(now),
             Ctl::Power => self.power_sheet(),
         }
         self.dirty = true;
@@ -2921,7 +3112,7 @@ impl App {
             })
             .collect();
         let focus = self.audio.outputs.iter().position(|o| Some(&o.id) == current.as_ref()).unwrap_or(0);
-        opts.push(Opt::new("Windows sound settings", Act::System("sound")).icon("settings"));
+        opts.push(Opt::new(if cfg!(windows) { "Windows sound settings" } else { "Sound settings" }, Act::System("sound")).icon("settings"));
         sound::play(Sound::Open);
         self.layers.push(Layer::Sheet { title: "Sound output".into(), sub: "Games, videos and Sofa play here.".into(), opts, focus, kind: SheetKind::Sound });
     }
@@ -3146,7 +3337,7 @@ impl App {
             // Over a game or a film: Sofa comes forward, and Stay awake goes back to it.
             let came = self.shell.home_pressed(now);
             self.sleep_from = came.as_ref().map(|w| w.hwnd);
-            platform::focus(windows::Win32::Foundation::HWND(self.shell.sofa as *mut _));
+            platform::focus_id(self.shell.sofa);
             self.ps_home(came, now);
         } else {
             sound::play(Sound::Notice);
@@ -3261,7 +3452,7 @@ impl App {
             self.toast(&title, &body);
         }
         if come_back && !self.qa && !self.focused {
-            platform::focus(windows::Win32::Foundation::HWND(self.shell.sofa as *mut _));
+            platform::focus_id(self.shell.sofa);
         }
         let m = self.spotify.snapshot();
         if m == self.music {
@@ -3431,6 +3622,7 @@ fn is_sleep_warning(l: &Layer) -> bool {
 }
 
 /// A key press and release, as a remote (or keyboard) sends it, to the window in front.
+#[cfg(windows)]
 fn send_key(vk: u16) {
     use windows::Win32::UI::Input::KeyboardAndMouse::*;
     let extended = matches!(VIRTUAL_KEY(vk), VK_UP | VK_DOWN | VK_LEFT | VK_RIGHT | VK_MEDIA_PLAY_PAUSE);
@@ -3445,6 +3637,7 @@ fn send_key(vk: u16) {
     }
 }
 
+#[cfg(windows)]
 fn volume(up: bool) {
     use windows::Win32::UI::Input::KeyboardAndMouse::{KEYEVENTF_KEYUP, VK_VOLUME_DOWN, VK_VOLUME_UP, keybd_event};
     let k = if up { VK_VOLUME_UP } else { VK_VOLUME_DOWN };
@@ -3455,19 +3648,18 @@ fn volume(up: bool) {
     }
 }
 
+/// The media volume keys' step, on the default output.
+#[cfg(target_os = "linux")]
+fn volume(up: bool) {
+    if let Some((v, _)) = audio::volume() {
+        audio::set_volume(v + if up { 0.05 } else { -0.05 });
+    }
+}
+
 fn quit() {
-    // SAFETY: posts WM_QUIT to this thread's queue.
-    unsafe { windows::Win32::UI::WindowsAndMessaging::PostQuitMessage(0) };
+    crate::quit();
 }
 
 fn post(hwnd: isize, msg: u32, w: usize) {
-    // SAFETY: posting to our window; a closed window drops it.
-    unsafe {
-        let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
-            Some(windows::Win32::Foundation::HWND(hwnd as *mut _)),
-            msg,
-            windows::Win32::Foundation::WPARAM(w),
-            windows::Win32::Foundation::LPARAM(0),
-        );
-    }
+    crate::post(hwnd, msg, w);
 }
