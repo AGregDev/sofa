@@ -33,6 +33,15 @@ points to, then `../../CLAUDE.md`.
   extension is the fix), the guard sees only desktop and panel windows, no Ctrl+Alt+H, no
   gamescope, CPU drawing at 4K.
 
+## New in 2.3.1
+
+- **A Sofa started as administrator** cannot be stopped by the setup (it is not elevated), so
+  2.3.0's setup failed with "os error 32". `install::install` and `install::uninstall` now
+  stop other Sofas (`stop_others`), wait up to three seconds until the installed file is no
+  longer held (`held`: a running program's file cannot be opened for writing) or no other
+  Sofa.exe runs (`platform::running_except`), and otherwise return `Failure::StillOpen`;
+  `main` asks to quit Sofa with Retry and Cancel. Nothing changes until it is gone.
+
 ## New in 2.3.0
 
 - **Linux**, above.
@@ -163,8 +172,6 @@ points to, then `../../CLAUDE.md`.
 6. The performance overlay over a real game (M26): its FPS against the game's own counter, and
    over Sofa when PS brings it back. Then Vulkan and OpenGL frame rates (Microsoft-Windows-
    DxgKrnl's present events, as PresentMon reads them).
-7. The setup cannot replace a Sofa started as administrator: its taskkill is refused and the
-   copy fails (os error 32, seen for 2.3.0). Say "Quit Sofa, then run the setup again" then.
 
 ## Known issues
 

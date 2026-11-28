@@ -83,7 +83,7 @@ Windows, and on Linux it is an X11 program drawn on the CPU, with the same look.
 
 | | Sofa 1.3 (Electron) | Sofa 2.3 on Windows | Sofa 2.3 on Linux |
 | --- | --- | --- | --- |
-| Memory on Home | 564 MB, 6 processes | 55 to 70 MB, 1 process | about 40 MB, 1 process |
+| Memory on Home | 564 MB, 6 processes | 55 to 80 MB, 1 process | about 40 MB, 1 process |
 | Memory while a game runs | same | about 18 MB (Sofa gives its art back) | about 33 MB |
 | Idle CPU | a helper polling every 30 ms | 0 % (it sleeps until something happens) | 0 % |
 | Download | 122 MB installer, 358 MB installed | 2.1 MB, one file | 4.6 MB, one AppImage |
@@ -97,7 +97,7 @@ on both systems.
 
 ### Windows
 
-1. Download **`Sofa-Setup-<version>.exe`** from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa. It replaces any older Sofa and keeps your settings.
+1. Download **`Sofa-Setup-<version>.exe`** from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa. It replaces any older Sofa and keeps your settings; if Sofa was started as administrator, the setup asks you to quit it first.
 2. On the first screen, choose whether Sofa starts with Windows and keeps Steam off the PS button (with an Xbox controller: also Game Bar off the Xbox button), then **Continue**.
 3. Steam also listens to the PS button. Sofa turns off Steam's **Guide button focuses Steam** for you: by itself when Steam is closed, or after asking when Steam is open (Steam restarts in the background). You can turn this off in Settings.
 
