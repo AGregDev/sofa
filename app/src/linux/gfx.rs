@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use tiny_skia as sk;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 
 pub const WM_IMAGE: u32 = 0x8000 + 1; // a decoded image is ready
@@ -223,6 +225,16 @@ enum Clip {
     Mask,
 }
 
+/// The performance overlay's window (override-redirect and click-through, so above every window
+/// and never in the way), its surface, its X11 id, and whether it shows.
+struct Overlay {
+    window: Rc<Window>,
+    id: isize,
+    surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
+    size: (u32, u32),
+    shown: bool,
+}
+
 pub struct Gfx {
     window: Rc<Window>,
     surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
@@ -246,6 +258,9 @@ pub struct Gfx {
     decoded: Receiver<Decoded>,
     frame: u64,
     pub now: f64,
+    overlay: Option<Overlay>,
+    /// The screen's frame while the overlay is drawn.
+    saved: Option<sk::Pixmap>,
 }
 
 /// Decoded pixels kept: five screens' worth, at least 24 MB (as on Windows).
@@ -282,7 +297,91 @@ impl Gfx {
             decoded,
             frame: 0,
             now: 0.0,
+            overlay: None,
+            saved: None,
         })
+    }
+
+    /// The performance overlay's window, created hidden by `linux::app`.
+    pub fn set_overlay(&mut self, window: Rc<Window>) {
+        let id = match window.window_handle().map(|h| h.as_raw()) {
+            Ok(RawWindowHandle::Xlib(h)) => h.window as isize,
+            Ok(RawWindowHandle::Xcb(h)) => h.window.get() as isize,
+            _ => 0,
+        };
+        self.overlay = Some(Overlay { window, id, surface: None, size: (0, 0), shown: false });
+    }
+
+    /// Starts drawing the overlay: `w` x `h` pixels on `background`, opaque (the surface shows
+    /// no transparency). False when there is no overlay window.
+    pub fn overlay_begin(&mut self, w: f32, h: f32, background: Color) -> bool {
+        if self.overlay.is_none() || self.saved.is_some() {
+            return false;
+        }
+        let Some(mut px) = sk::Pixmap::new(w.ceil().max(1.0) as u32, h.ceil().max(1.0) as u32) else { return false };
+        px.fill(sk_color(background.alpha(1.0)));
+        self.saved = Some(std::mem::replace(&mut self.px, px));
+        self.clips.clear();
+        true
+    }
+
+    /// Shows what was drawn in the overlay window, `margin` pixels in from the top left of the
+    /// screen Sofa is on, above every window.
+    pub fn overlay_end(&mut self, margin: f32) {
+        let Some(screen) = self.saved.take() else { return };
+        let px = std::mem::replace(&mut self.px, screen);
+        let origin = self.window.current_monitor().map(|m| m.position()).unwrap_or_default();
+        let Some(o) = self.overlay.as_mut() else { return };
+        let (w, h) = (px.width(), px.height());
+        let (Some(nw), Some(nh)) = (NonZeroU32::new(w), NonZeroU32::new(h)) else { return };
+        if o.size != (w, h) {
+            let _ = o.window.request_inner_size(PhysicalSize::new(w, h));
+            o.size = (w, h);
+        }
+        o.window.set_outer_position(PhysicalPosition::new(origin.x + margin as i32, origin.y + margin as i32));
+        if o.surface.is_none() {
+            o.surface = softbuffer::Context::new(o.window.clone()).and_then(|c| softbuffer::Surface::new(&c, o.window.clone())).ok();
+        }
+        let Some(surface) = o.surface.as_mut() else { return };
+        if surface.resize(nw, nh).is_err() {
+            return;
+        }
+        let Ok(mut buf) = surface.buffer_mut() else { return };
+        // SAFETY: the surface's u32 pixels seen as their bytes (same memory, and u8 needs no
+        // alignment); both are w x h pixels of four bytes, BGRA in memory.
+        let dst = unsafe { std::slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<u8>(), buf.len() * 4) };
+        if dst.len() == px.data().len() {
+            dst.copy_from_slice(px.data());
+        }
+        let _ = buf.present();
+        if !o.shown {
+            o.window.set_visible(true);
+            o.shown = true;
+        }
+        self.overlay_raise();
+    }
+
+    /// Puts the overlay back above every window.
+    pub fn overlay_raise(&self) {
+        if let Some(o) = &self.overlay
+            && o.shown
+            && o.id != 0
+        {
+            crate::linux::x11::raise(o.id);
+        }
+    }
+
+    pub fn overlay_hide(&mut self) {
+        if let Some(o) = self.overlay.as_mut()
+            && o.shown
+        {
+            o.window.set_visible(false);
+            o.shown = false;
+        }
+    }
+
+    pub fn overlay_shown(&self) -> bool {
+        self.overlay.as_ref().is_some_and(|o| o.shown)
     }
 
     /// The window changed size: the next frame is drawn at the new size.

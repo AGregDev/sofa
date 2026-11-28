@@ -226,6 +226,14 @@ pub fn set_above(w: isize, on: bool) {
     send(&x, w as u32, x.a.state, [u32::from(on), x.a.above, 0, FROM_TOOL, 0]);
 }
 
+/// Puts one of Sofa's windows above every other: the overlay, an override-redirect window that
+/// the window manager leaves alone (one it raises later could cover it).
+pub fn raise(w: isize) {
+    let Some(x) = x() else { return };
+    let _ = x.c.configure_window(w as u32, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE));
+    let _ = x.c.flush();
+}
+
 /// The screen's size in pixels.
 pub fn screen_size() -> (u32, u32) {
     let Some(x) = x() else { return (1920, 1080) };

@@ -56,9 +56,12 @@ to start a game or switch apps.
   - **Sleep timer**: 30 min, 1 h, 1 h 30 min, 2 h. A minute before the end Sofa comes
     forward with a countdown (Stay awake, Sleep now); games and videos wait in sleep.
   - **Controller light** and **Power** (sleep, restart, shut down, desktop, quit).
-  - **Performance**: the memory in use, each graphics card's video memory, Sofa's own
-    memory and its frame rate. **Show on screen** keeps the same numbers in a small
-    overlay, top left, over everything. They are read only while they show.
+  - **Performance**: CPU and GPU use, memory and each graphics card's video memory.
+    **Show on screen** keeps them, and the frame rate of the game in front, in a one-line
+    overlay in the top left corner, a window of its own over every game and app (not over
+    exclusive full screen). Read only while they show. The frame rate needs Windows'
+    Performance Log Users group, as Game Bar's does: Sofa offers to ask Windows once, and it
+    counts from the next sign-in. DirectX 9 to 12 games; Vulkan and OpenGL show none yet.
   - ≡ opens Settings from here.
 - Running cards name the program itself (Firefox, not the page it shows) with its
   own icon; the page or document shows beside "Running" in the hero.
@@ -132,8 +135,8 @@ so glibc 2.31 or later.
 **Works as on Windows**
 - Home, sections, search with the on-screen keyboard and Paste, item options, settings, the
   first-run screen, the quick menu, the sleep timer, Sleep, Restart, Shut down (systemd).
-- Performance and its overlay; video memory from NVIDIA's driver (NVML) and from amdgpu, none
-  for other cards (Intel's, nouveau).
+- Performance and its overlay (override-redirect, over every window); GPU use and video memory
+  from NVIDIA's driver (NVML) and from amdgpu, none for other cards (Intel's, nouveau).
 - Every pad through evdev, read whichever window has the focus: DualSense, Xbox and other
   xpad pads, Switch Pro; the PS (Guide) button brings Sofa forward from inside a game with that
   game first, and ✕ hands it back once the button is up. The keyboard works too.
@@ -166,6 +169,8 @@ so glibc 2.31 or later.
   press instead.
 - **The DualSense without Steam's udev rules**: no lights and no mute button (the kernel keeps
   the mute button to itself); everything else works.
+- **The frame rate in the performance overlay.** Windows tells Sofa the frames a game presents;
+  nothing on Linux tells one program another's (MangoHud draws inside the game instead).
 - RecompLauncher (a Windows launcher) and the Game Bar setting (Windows only).
 - **gamescope and the Steam Deck's Game Mode**: gamescope decides which app is in front; Sofa
   runs in desktop sessions.

@@ -15,7 +15,7 @@ use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
-use winit::platform::x11::{EventLoopBuilderExtX11, WindowAttributesExtX11};
+use winit::platform::x11::{EventLoopBuilderExtX11, WindowAttributesExtX11, WindowType};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::{Fullscreen, Icon, Window, WindowId};
 
@@ -105,6 +105,8 @@ struct Runner {
     data: PathBuf,
     qa: bool,
     window: Option<Rc<Window>>,
+    /// The performance overlay's window: its events are not Sofa's.
+    overlay: Option<WindowId>,
     app: Option<ui::App>,
     id: isize,
     focused: bool,
@@ -163,7 +165,24 @@ impl Runner {
         let icon_png = asset("sofa-icon.png", crate::ICON_PNG);
         let welcome_jpg = asset("sofa-welcome.jpg", crate::WELCOME_JPG);
         let started = crate::now();
-        let g = gfx::Gfx::new(window.clone(), crate::FONT)?;
+        let mut g = gfx::Gfx::new(window.clone(), crate::FONT)?;
+        // The performance overlay: override-redirect (above every window; the window manager
+        // leaves it alone), click-through and never focused; drawn by `App::draw_overlay`.
+        let overlay = Window::default_attributes()
+            .with_title("Sofa overlay")
+            .with_name(general, instance)
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_visible(false)
+            .with_active(false)
+            .with_inner_size(PhysicalSize::new(8u32, 8u32))
+            .with_override_redirect(true)
+            .with_x11_window_type(vec![WindowType::Notification]);
+        if let Ok(o) = el.create_window(overlay) {
+            let _ = o.set_cursor_hittest(false);
+            self.overlay = Some(o.id());
+            g.set_overlay(Rc::new(o));
+        }
         let inp = input::Input::new(crate::START.with(|s| *s));
         let sh = shell::Shell::new(self.id, false);
         let mut app = ui::App::new(g, inp, sh, self.data.clone(), icon_png, welcome_jpg, self.qa, crate::now());
@@ -492,7 +511,10 @@ impl ApplicationHandler<Msg> for Runner {
         }
     }
 
-    fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if self.overlay == Some(id) {
+            return;
+        }
         let t = crate::now();
         match event {
             WindowEvent::CloseRequested | WindowEvent::Destroyed => {
@@ -737,7 +759,7 @@ pub fn main() -> std::process::ExitCode {
         qa_pipe(&data, el.create_proxy());
     }
     el.set_control_flow(ControlFlow::Wait);
-    let mut runner = Runner { args: args.clone(), data, qa, window: None, app: None, id: 0, focused: false, mods: ModifiersState::default(), next_frame: 0.0, relaunch: false };
+    let mut runner = Runner { args: args.clone(), data, qa, window: None, overlay: None, app: None, id: 0, focused: false, mods: ModifiersState::default(), next_frame: 0.0, relaunch: false };
     let _ = el.run_app(&mut runner);
     if let Some(app) = runner.app.as_mut() {
         app.save();

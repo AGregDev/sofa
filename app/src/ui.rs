@@ -386,6 +386,8 @@ pub(crate) enum Act {
     SpOpen(String),
     /// A line that only shows something (the Performance panel's numbers).
     Info,
+    /// Asks Windows to let Sofa watch frames (Performance Log Users), for the overlay's rate.
+    AllowFrames,
 }
 
 #[derive(Clone)]
@@ -566,8 +568,9 @@ pub struct App {
     perf_at: f64,
     /// The numbers last shown, so the screen is drawn again only when one changes.
     perf_shown: String,
-    /// The frames drawn in the last second, for the frame rate.
-    pub(crate) frames: crate::perf::Frames,
+    /// The frame rate of the program in front, for the overlay, and whether frames are watched.
+    pub(crate) fps: Option<u32>,
+    frames_on: bool,
     /// An Xbox (XInput) pad was connected this run: Game Bar's use of its button is offered.
     pub(crate) xbox: bool,
 }
@@ -667,7 +670,8 @@ impl App {
             perf: None,
             perf_at: -1e9,
             perf_shown: String::new(),
-            frames: Default::default(),
+            fps: None,
+            frames_on: false,
             xbox,
             tab: "home".into(),
             rows: Vec::new(),
@@ -2005,6 +2009,14 @@ impl App {
                 }
             }
             Act::Info => sound::play(Sound::Edge),
+            Act::AllowFrames => {
+                // A QA run asks Windows nothing.
+                if !self.qa && crate::perf::allow_frames() {
+                    self.toast("Sign out and back in", "Then the frame rate shows over games.");
+                } else {
+                    sound::play(Sound::Edge);
+                }
+            }
             Act::HomeButton => {
                 let next = if self.store.text("homeButton") == "combo" { "ps" } else { "combo" };
                 self.store.set("homeButton", Value::from(next));
@@ -2357,7 +2369,7 @@ impl App {
             Some(Layer::Quick { focus, .. }) => format!("quick:{}", focus.key()),
         };
         format!(
-            "state|tab={}|focus={},{}|tile={}|layer={}|rows={}|items={}|running={}|toast={}|sleep={}|volume={}|output={}|mic={}|music={}|resume={}|rowkeys={}",
+            "state|tab={}|focus={},{}|tile={}|layer={}|rows={}|items={}|running={}|toast={}|sleep={}|volume={}|output={}|mic={}|music={}|resume={}|overlay={}|rowkeys={}",
             self.tab,
             self.focus.0,
             self.focus.1,
@@ -2377,6 +2389,7 @@ impl App {
                 (None, Some(h)) => format!("done:{h}"),
                 (None, None) => "-".to_owned(),
             },
+            if self.gfx.overlay_shown() { "on" } else { "off" },
             self.rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>().join(",")
         )
     }
@@ -2902,41 +2915,48 @@ impl App {
         }
     }
 
-    /// Sofa's frame rate as the overlay says it ("60 fps, 3.1 ms to draw"). Sofa
-    /// draws only when something changes, so with fewer than two frames in the last second it is
-    /// idle (and the time a frame takes is left out, or the overlay would draw itself again each
-    /// second to show the time of the frame before).
-    pub(crate) fn fps_text(&self, now: f64) -> String {
-        let fps = self.frames.fps(now);
-        match (fps, self.frames.ms(now)) {
-            (2.., Some(ms)) => format!("{fps} fps, {ms:.1} ms to draw"),
-            _ => "Idle".into(),
-        }
-    }
-
-    /// Reads memory again (at most once a second), and video memory with it while the Performance
-    /// panel or the overlay is up; the open panel follows, and the screen is drawn again only when
-    /// a number on it changed.
+    /// Reads CPU use and memory again (at most once a second), and the cards' use and video
+    /// memory with them while the Performance panel or the overlay is up. The open panel and the
+    /// overlay follow, drawn again only when a number on them changed; the overlay is raised
+    /// above every window at each read, and Sofa's own screen is not drawn for it.
     fn read_perf(&mut self, now: f64, force: bool) {
         if !force && now - self.perf_at < 1000.0 {
             return;
         }
-        let video = self.store.flag("perfOverlay") || self.layers.iter().any(|l| matches!(l, Layer::Sheet { kind: SheetKind::Perf, .. }));
+        let overlay = self.store.flag("perfOverlay");
+        // Frames are watched only while the overlay is up, and never in a QA run.
+        let frames = overlay && !self.qa;
+        if frames != self.frames_on {
+            crate::perf::watch_frames(frames);
+            self.frames_on = frames;
+        }
+        let panel = self.layers.iter().any(|l| matches!(l, Layer::Sheet { kind: SheetKind::Perf, .. }));
+        let video = overlay || panel;
         let usage = crate::perf::read(video);
-        // Video memory is still being opened (on its own thread, for a tenth of a second or so):
-        // look again soon instead of in a second.
+        // Video memory is still being opened (on its own thread, for half a second or so): look
+        // again soon instead of in a second.
         self.perf_at = if video && usage.gpus.is_none() { now - 800.0 } else { now };
         self.perf = Some(usage);
-        let opts = self.perf_opts(now);
-        // What is on screen: the quick menu's card, and the panel's or the overlay's numbers.
+        self.fps = if overlay { crate::perf::frame_rate() } else { None };
+        let opts = self.perf_opts();
+        // What is on screen: the quick menu's card, the panel's numbers and the overlay's.
         let mut shown = self.perf_card();
         if video {
             for text in opts.iter().flat_map(|o| [o.value.as_deref(), o.detail.as_deref()]).flatten() {
                 shown.push('|');
                 shown.push_str(text);
             }
+            shown.push_str(&format!("|{:?}", self.fps));
         }
-        if !force && shown == self.perf_shown {
+        let changed = force || shown != self.perf_shown;
+        if !overlay {
+            self.gfx.overlay_hide();
+        } else if changed || !self.gfx.overlay_shown() {
+            self.draw_overlay();
+        } else {
+            self.gfx.overlay_raise();
+        }
+        if !changed {
             return;
         }
         self.perf_shown = shown;
@@ -2945,7 +2965,9 @@ impl App {
                 *o = opts.clone();
             }
         }
-        self.dirty = true;
+        if panel || self.layers.iter().any(|l| matches!(l, Layer::Quick { .. })) {
+            self.dirty = true;
+        }
     }
 
     /// The quick menu card's value: "38% memory".
@@ -2953,40 +2975,44 @@ impl App {
         self.perf.as_ref().filter(|u| u.ram_total > 0).map_or_else(String::new, |u| format!("{}% memory", crate::perf::percent(u.ram_used, u.ram_total)))
     }
 
-    fn perf_opts(&self, now: f64) -> Vec<Opt> {
+    /// The panel: the overlay's switch, CPU use, memory, then each card's use and video memory.
+    fn perf_opts(&self) -> Vec<Opt> {
         let mut opts = vec![Opt::new("Show on screen", Act::Toggle("perfOverlay")).icon("gauge").switch(self.store.flag("perfOverlay"))];
-        if let Some(u) = &self.perf {
-            if u.ram_total > 0 {
-                opts.push(Opt::new("Memory", Act::Info).value(format!("{}, {}%", crate::perf::of(u.ram_used, u.ram_total), crate::perf::percent(u.ram_used, u.ram_total))));
-            }
-            match &u.gpus {
-                None => opts.push(Opt::new("Video memory", Act::Info).value("Reading")),
-                Some(gpus) if gpus.is_empty() => opts.push(Opt::new("Video memory", Act::Info).value("Not reported")),
-                Some(gpus) => {
-                    for g in gpus {
-                        let value = match g.used {
-                            Some(used) => format!("{}, {}%", crate::perf::of(used, g.total), crate::perf::percent(used, g.total)),
-                            None => format!("{} in all", crate::perf::gb(g.total)),
-                        };
-                        opts.push(Opt::new("Video memory", Act::Info).detail(g.name.clone()).value(value));
+        let Some(u) = &self.perf else { return opts };
+        opts.push(Opt::new("CPU", Act::Info).value(u.cpu.map_or_else(|| "Reading".to_owned(), |c| format!("{c}%"))));
+        if u.ram_total > 0 {
+            opts.push(Opt::new("Memory", Act::Info).value(format!("{}, {}%", crate::perf::of(u.ram_used, u.ram_total), crate::perf::percent(u.ram_used, u.ram_total))));
+        }
+        match &u.gpus {
+            None => opts.push(Opt::new("GPU", Act::Info).value("Reading")),
+            Some(gpus) if gpus.is_empty() => opts.push(Opt::new("GPU", Act::Info).value("Not reported")),
+            Some(gpus) => {
+                for g in gpus {
+                    let memory = match g.used {
+                        Some(used) => format!("{}, {}%", crate::perf::of(used, g.total), crate::perf::percent(used, g.total)),
+                        None => format!("{} in all", crate::perf::gb(g.total)),
+                    };
+                    match g.busy {
+                        Some(busy) => {
+                            opts.push(Opt::new("GPU", Act::Info).detail(g.name.clone()).value(format!("{busy}%")));
+                            opts.push(Opt::new("Video memory", Act::Info).value(memory));
+                        }
+                        None => opts.push(Opt::new("Video memory", Act::Info).detail(g.name.clone()).value(memory)),
                     }
                 }
             }
-            opts.push(Opt::new("Sofa", Act::Info).value(crate::perf::mb(u.sofa)));
         }
-        // The rate, and the time a frame takes under it (the value column holds about 20 letters).
-        let fps = self.frames.fps(now);
-        opts.push(match (fps, self.frames.ms(now)) {
-            (2.., Some(ms)) => Opt::new("Frame rate", Act::Info).value(format!("{fps} fps")).detail(format!("{ms:.1} ms to draw a frame")),
-            _ => Opt::new("Frame rate", Act::Info).value("Idle"),
-        });
+        // Windows lets Sofa watch frames only in Performance Log Users (as Game Bar asks).
+        if crate::perf::frames_allowed() == Some(false) {
+            opts.push(Opt::new("Frame rate in games", Act::AllowFrames).detail("Windows asks once. It shows after you sign in again.").value("Allow"));
+        }
         opts
     }
 
     fn perf_sheet(&mut self, now: f64) {
         sound::play(Sound::Open);
-        self.layers.push(Layer::Sheet { title: "Performance".into(), sub: "Memory and video memory in use now, and how fast Sofa draws.".into(), opts: Vec::new(), focus: 0, kind: SheetKind::Perf });
-        // Read with the panel open, so video memory is read too; this fills the panel.
+        self.layers.push(Layer::Sheet { title: "Performance".into(), sub: "What this PC is using now. Show on screen keeps it over games and apps.".into(), opts: Vec::new(), focus: 0, kind: SheetKind::Perf });
+        // Read with the panel open, so the cards are read too; this fills the panel.
         self.read_perf(now, true);
     }
 

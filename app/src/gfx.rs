@@ -16,7 +16,8 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Imaging::*;
 use windows::Win32::System::Com::*;
-use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+use windows::Win32::Graphics::Gdi::{AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow};
+use windows::Win32::UI::WindowsAndMessaging::{HWND_TOPMOST, PostMessageW, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SetWindowPos, ShowWindow, ULW_ALPHA, UpdateLayeredWindow};
 use windows::core::*;
 use windows_numerics::{Matrix3x2, Vector2};
 
@@ -196,6 +197,25 @@ pub struct Gfx {
     decoded: Receiver<Decoded>,
     frame: u64,
     pub now: f64,
+    /// Sofa's window: the overlay goes on its screen.
+    hwnd: HWND,
+    /// The performance overlay's layered window, the bitmap it is drawn into, and whether it
+    /// shows.
+    overlay: Option<HWND>,
+    overlay_bitmap: Option<(ID2D1Bitmap1, u32, u32)>,
+    overlay_shown: bool,
+    /// The screen's target while the overlay is drawn.
+    saved_target: Option<ID2D1Image>,
+}
+
+/// The top left of the screen `hwnd` is on.
+fn screen_origin(hwnd: HWND) -> (i32, i32) {
+    let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+    // SAFETY: reads into a local struct whose size it is given.
+    unsafe {
+        let m = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+        if GetMonitorInfoW(m, &mut info).as_bool() { (info.rcMonitor.left, info.rcMonitor.top) } else { (0, 0) }
+    }
 }
 
 /// Decoded pixels kept as bitmaps: five screens' worth, at least 24 MB. What was drawn least
@@ -290,6 +310,11 @@ impl Gfx {
                 decoded,
                 frame: 0,
                 now: 0.0,
+                hwnd,
+                overlay: None,
+                overlay_bitmap: None,
+                overlay_shown: false,
+                saved_target: None,
             };
             g.attach_target()?;
             Ok(g)
@@ -348,6 +373,105 @@ impl Gfx {
             self.layouts.retain(|_, (_, used)| frame - *used < 600);
         }
         Ok(())
+    }
+
+    /// The performance overlay's window: layered and click-through, created hidden by `main`.
+    pub fn set_overlay(&mut self, hwnd: isize) {
+        self.overlay = (hwnd != 0).then_some(HWND(hwnd as *mut _));
+    }
+
+    /// Starts drawing the overlay: `w` x `h` pixels, transparent, with the screen's device, text
+    /// and brush. False when there is no overlay window.
+    pub fn overlay_begin(&mut self, w: f32, h: f32, _background: Color) -> bool {
+        if self.overlay.is_none() {
+            return false;
+        }
+        let (w, h) = (w.ceil().max(1.0) as u32, h.ceil().max(1.0) as u32);
+        // SAFETY: a bitmap of our device context, drawn into between BeginDraw and EndDraw
+        // (`overlay_end`, which puts the screen's target back).
+        unsafe {
+            if self.overlay_bitmap.as_ref().is_none_or(|(_, bw, bh)| (*bw, *bh) != (w, h)) {
+                let props = D2D1_BITMAP_PROPERTIES1 {
+                    pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+                    dpiX: 96.0,
+                    dpiY: 96.0,
+                    bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_GDI_COMPATIBLE,
+                    colorContext: ManuallyDrop::new(None),
+                };
+                match self.dc.CreateBitmap(D2D_SIZE_U { width: w, height: h }, None, 0, &props) {
+                    Ok(b) => self.overlay_bitmap = Some((b, w, h)),
+                    Err(_) => return false,
+                }
+            }
+            let Some((bitmap, _, _)) = &self.overlay_bitmap else { return false };
+            self.saved_target = self.dc.GetTarget().ok();
+            self.dc.SetTarget(bitmap);
+            self.dc.BeginDraw();
+            self.dc.SetTransform(&Matrix3x2::identity());
+            self.dc.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }));
+        }
+        true
+    }
+
+    /// Hands what was drawn to the overlay window, `margin` pixels in from the top left of the
+    /// screen Sofa is on, and keeps it above every window (Sofa's own goes topmost at home).
+    pub fn overlay_end(&mut self, margin: f32) {
+        let (Some(hwnd), Some((w, h))) = (self.overlay, self.overlay_bitmap.as_ref().map(|(_, w, h)| (*w as i32, *h as i32))) else { return };
+        // SAFETY: between overlay_begin's BeginDraw and this EndDraw; the DC Direct2D lends is
+        // given back before EndDraw, and the screen's target is put back.
+        unsafe {
+            let mut handed = false;
+            if let Ok(interop) = self.dc.cast::<ID2D1GdiInteropRenderTarget>()
+                && let Ok(hdc) = interop.GetDC(D2D1_DC_INITIALIZE_MODE_COPY)
+            {
+                let (x, y) = screen_origin(self.hwnd);
+                let at = POINT { x: x + margin.round() as i32, y: y + margin.round() as i32 };
+                let size = SIZE { cx: w, cy: h };
+                let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: AC_SRC_ALPHA as u8 };
+                handed = UpdateLayeredWindow(hwnd, None, Some(&at), Some(&size), Some(hdc), Some(&POINT::default()), COLORREF(0), Some(&blend), ULW_ALPHA).is_ok();
+                let _ = interop.ReleaseDC(None);
+            }
+            let _ = self.dc.EndDraw(None, None);
+            match self.saved_target.take() {
+                Some(t) => self.dc.SetTarget(&t),
+                None => self.dc.SetTarget(None),
+            }
+            if handed && !self.overlay_shown {
+                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                self.overlay_shown = true;
+            }
+        }
+        self.overlay_raise();
+    }
+
+    /// Puts the overlay back above every window (Sofa's own goes topmost at home). A QA run
+    /// keeps its windows out of the way: no topmost.
+    pub fn overlay_raise(&self) {
+        if let Some(hwnd) = self.overlay
+            && self.overlay_shown
+            && !crate::QA.get().copied().unwrap_or(false)
+        {
+            // SAFETY: changes our own window's z-order, without activating it.
+            unsafe {
+                let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+            }
+        }
+    }
+
+    pub fn overlay_hide(&mut self) {
+        if let Some(hwnd) = self.overlay
+            && self.overlay_shown
+        {
+            // SAFETY: hides our own window.
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+            self.overlay_shown = false;
+        }
+    }
+
+    pub fn overlay_shown(&self) -> bool {
+        self.overlay_shown
     }
 
     pub fn clear(&self, c: Color) {

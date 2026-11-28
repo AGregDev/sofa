@@ -206,26 +206,25 @@ state
 c 'U13 Stay awake turns the timer off' '[ "${S[sleep]:-}" = off ] && [ "${S[layer]:-}" = none ]' "sleep ${S[sleep]:-}, ${S[layer]:-}"
 
 # ---------- Performance (quick menu) ----------
-# Memory and video memory are read from this computer (nothing changes); the overlay is Sofa's own.
+# CPU, GPU, memory and video memory are read from this computer (nothing changes). The overlay is
+# a window of its own (override-redirect); there is no frame rate on Linux.
 key Home
 key Right 6
 key Enter
 state
-c 'U14 Performance shows memory, video memory and the frame rate' '[ "${S[layer]:-}" = "sheet:Performance:0" ]' "${S[layer]:-}"
+c 'U14 Performance shows CPU, GPU, memory and video memory' '[ "${S[layer]:-}" = "sheet:Performance:0" ]' "${S[layer]:-}"
 shot 22-performance 900
 key Enter
-c 'U15 The performance overlay switches on (saved)' '[ "$(setting .settings.perfOverlay)" = true ]' "$(setting .settings.perfOverlay)"
-key Esc
-key Home
-shot 23-performance-overlay 1200
-key Home
-key Right 6
-key Enter
+sleep 1.2
+state
+MAPPED=$(xwininfo -name "Sofa overlay" 2>/dev/null | grep -o 'IsViewable\|IsUnMapped\|IsUnviewable' || echo none)
+c 'U15 The overlay shows in a window of its own (saved)' '[ "$(setting .settings.perfOverlay)" = true ] && [ "${S[overlay]:-}" = on ] && [ "$MAPPED" = IsViewable ]' "$(setting .settings.perfOverlay), overlay ${S[overlay]:-}, window $MAPPED"
 key Enter
 key Esc
 key Home
 state
-c 'U16 and off again' '[ "$(setting .settings.perfOverlay)" = false ] && [ "${S[layer]:-}" = none ]' "$(setting .settings.perfOverlay), ${S[layer]:-}"
+MAPPED=$(xwininfo -name "Sofa overlay" 2>/dev/null | grep -o 'IsViewable\|IsUnMapped\|IsUnviewable' || echo none)
+c 'U16 and off again' '[ "$(setting .settings.perfOverlay)" = false ] && [ "${S[overlay]:-}" = off ] && [ "$MAPPED" != IsViewable ] && [ "${S[layer]:-}" = none ]' "$(setting .settings.perfOverlay), overlay ${S[overlay]:-}, window $MAPPED, ${S[layer]:-}"
 
 # ---------- Tabs ----------
 TABS=""

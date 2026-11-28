@@ -12,7 +12,7 @@ the PS button always takes you home, and the desktop stays out of sight until yo
 [![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-efe9de?style=flat-square&labelColor=1c1a18)](#windows)
 [![Linux AppImage](https://img.shields.io/badge/Linux-AppImage-efe9de?style=flat-square&labelColor=1c1a18)](#linux)
 [![QA](https://img.shields.io/badge/QA-76%2F76%20on%20both-efe9de?style=flat-square&labelColor=1c1a18)](QA.md)
-[![Memory](https://img.shields.io/badge/memory-~60%20MB-efe9de?style=flat-square&labelColor=1c1a18)](#small-and-fast)
+[![Memory](https://img.shields.io/badge/memory-under%2080%20MB-efe9de?style=flat-square&labelColor=1c1a18)](#small-and-fast)
 [![License: MIT](https://img.shields.io/badge/license-MIT-efe9de?style=flat-square&labelColor=1c1a18)](LICENSE)
 
 [**Download**](https://github.com/AGregDev/sofa/releases/latest) · [Install](#install) · [Connect Discord and Spotify](#connect-discord-and-spotify) · [Controls](#controls) · [Build from source](#build-from-source)
@@ -33,7 +33,7 @@ dashboard, and gathers **Steam**, **streaming services** and **your apps** into 
 fast interface you never need a mouse for.
 
 Sofa is one native program written in Rust, with no browser engine and no helper processes:
-about **60 MB of memory** on Home, and almost nothing while you play. It draws with Direct2D on
+**under 80 MB of memory** on Home, and a fraction of that while you play. It draws with Direct2D on
 Windows, and on Linux it is an X11 program drawn on the CPU, with the same look.
 
 <table>
@@ -63,7 +63,7 @@ Windows, and on Linux it is an X11 program drawn on the CPU, with the same look.
 - **Steam stays off the PS button:** Sofa switches off Steam's own PS-button setting for you, and pushes Steam back down if it still grabs the screen.
 - Home rows: Running, Discord voice, Jump back in, Favorites, Games, Media, Music and Apps, each long row ending in an "All ..." tile. The hero tells you how long a game has been running and your total Steam play time.
 - **The quick menu (PS on Home):** a bedside clock with what is playing (Spotify, a browser, any player: play, pause, skip), sound output (TV, headphones, the controller), volume, microphone mute, a **sleep timer**, **performance** and power.
-- **Performance:** the memory in use, each graphics card's video memory, Sofa's own memory and its frame rate, and **Show on screen** for an overlay with the same numbers.
+- **Performance:** CPU and GPU use, memory and video memory, and **Show on screen**: a compact overlay with the same numbers and the frame rate of the game in front, which stays over every game and app. ([About the frame rate](#the-performance-overlay))
 - Interface sounds, a short start-up, notices for controllers connecting and a low battery.
 
 **Your whole library**
@@ -83,10 +83,10 @@ Windows, and on Linux it is an X11 program drawn on the CPU, with the same look.
 
 | | Sofa 1.3 (Electron) | Sofa 2.3 on Windows | Sofa 2.3 on Linux |
 | --- | --- | --- | --- |
-| Memory on Home | 564 MB, 6 processes | about 65 MB, 1 process | about 40 MB, 1 process |
-| Memory while a game runs | same | about 18 MB (Sofa gives its art back) | about 31 MB |
+| Memory on Home | 564 MB, 6 processes | 55 to 80 MB, 1 process | about 40 MB, 1 process |
+| Memory while a game runs | same | about 18 MB (Sofa gives its art back) | about 32 MB |
 | Idle CPU | a helper polling every 30 ms | 0 % (it sleeps until something happens) | 0 % |
-| Download | 122 MB installer, 358 MB installed | 2.2 MB, one file | one AppImage |
+| Download | 122 MB installer, 358 MB installed | 2.1 MB, one file | 4.5 MB, one AppImage |
 
 Focus moves, scrolling and the hero art run at the display's refresh rate; art is decoded
 off the main thread at the size it is drawn. Every release is optimized (link-time
@@ -134,8 +134,22 @@ choose **Uninstall Sofa**, or run `~/.local/bin/sofa --uninstall`; your settings
 `~/.config/sofa`.
 
 What Linux does not do yet, and why, is in [PRODUCT.md](PRODUCT.md#linux-23): apps that draw
-through Wayland themselves get no Running card, the guard sees less of the desktop, and there
-is no Ctrl+Alt+H.
+through Wayland themselves get no Running card, the guard sees less of the desktop, there is no
+Ctrl+Alt+H, and the performance overlay has no frame rate.
+
+### The performance overlay
+
+PS on Home, **Performance**, **Show on screen**: one line in the top left corner with CPU use,
+GPU use, memory, video memory and the frame rate of the game in front, over every game and app
+until you turn it off. Games in exclusive full screen hide it; their borderless or windowed
+mode shows it.
+
+On Windows the frame rate comes from the frames Windows sees a game present, as Game Bar's
+does, so it needs the same permission: membership of **Performance Log Users**. Without it,
+Performance offers **Frame rate in games: Allow**; Windows asks once for an administrator, and
+the frame rate shows after you sign out and back in. It counts games made with DirectX 9 to 12;
+Vulkan and OpenGL games show none yet. On Linux the overlay shows the other numbers (GPU use and
+video memory for NVIDIA's driver and AMD cards).
 
 ## Connect Discord and Spotify
 
@@ -264,7 +278,8 @@ sofa.exe ─ one window, one message loop: draws only while something moves
    ├─ audio    sound outputs, volume and the microphone (Windows' endpoint APIs)
    ├─ media    Now playing from Windows' media sessions, on its own thread
    ├─ spotify  your Spotify library and playback (Web API, PKCE sign-in), on its own thread
-   ├─ perf     memory, video memory (DXGI, GPU performance counters) and the frame rate
+   ├─ perf     CPU and GPU use, memory, video memory (DXGI, GPU performance counters) and
+   │           games' frame rate (an ETW session, only while the overlay is up)
    ├─ shell    foreground events: stays in front, guards the desktop, pushes Steam back
    ├─ library  Steam manifests and art (crates/vdf), RecompLauncher, the Start menu
    └─ steam    turns off Steam's PS-button setting in localconfig.vdf, safely (crates/steam)

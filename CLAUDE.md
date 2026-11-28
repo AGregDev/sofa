@@ -66,7 +66,7 @@ pipe (`$TMPDIR/sofa-qa/control`) that `qa/qa.sh` drives.
 | `app/src/install.rs` | install, start with Windows, Start menu shortcut, Installed apps entry, uninstall, removing Sofa 1.x |
 | `app/src/store.rs` | `%APPDATA%\sofa\sofa.json`, same keys as Sofa 1.x |
 | `app/src/sound.rs` | interface sounds, synthesized once into in-memory WAVs |
-| `app/src/perf.rs` | the Performance panel and overlay: memory, Sofa's own, each card's video memory (DXGI and PDH's GPU Adapter Memory counters; NVML and amdgpu on Linux, opened once on the short-lived `perf` thread), the frame rate |
+| `app/src/perf.rs` | the Performance panel and overlay: CPU, memory, each card's use and video memory (DXGI and PDH's GPU counters; NVML and amdgpu on Linux, opened once on the short-lived `perf` thread), and games' frame rate from an ETW session (`frames`, Windows, only while the overlay is up) |
 | `app/src/icons.rs` | reads `app/assets/icons.js` (Lucide) and `brand.js` at build time |
 | `app/src/draw.rs` | what both renderers share: Rect, Color, Fit, the art's tone, SVG path data walked into either renderer's paths |
 | `app/build.rs` | icon and version resource through windres (Windows targets only) |
@@ -91,8 +91,9 @@ pipe (`$TMPDIR/sofa-qa/control`) that `qa/qa.sh` drives.
   (`shell::NOTHING_IS_SHELL`). Browsers Sofa starts get `--ozone-platform=x11` (or
   `MOZ_ENABLE_WAYLAND=0`) and the class `SofaWeb` so Sofa can see and drive them.
 - **QA mode (`--qa`) must never touch the real world.** It uses `%TEMP%\sofa-qa`, its own
-  window class and mutex, no foreground hook, no topmost, no hotkey, and launching,
-  closing, the Steam fix and start with Windows return early. Add the same guard to
+  window class and mutex, no foreground hook, no topmost (the overlay's window included), no
+  hotkey, no ETW session, and launching, closing, the Steam fix and start with Windows return
+  early. Add the same guard to
   anything new with side effects. QA check X1 compares the real settings, Run key, Steam
   setting, shortcut and Installed apps entry before and after. On Linux: `$TMPDIR/sofa-qa`,
   the class `SofaQA` and its own socket, no window-manager watch, no autostart or desktop

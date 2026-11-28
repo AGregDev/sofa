@@ -36,15 +36,32 @@ points to, then `../../CLAUDE.md`.
 ## New in 2.3.0
 
 - **Linux**, above.
-- **Performance** (`perf.rs`, `Ctl::Perf`, `SheetKind::Perf`, `view.rs` `draw_perf`): in the
-  quick menu, the memory in use, each card's video memory, Sofa's own memory and its frame rate
-  (`perf::Frames`: frames drawn in the last second and the time each took to draw). Show on
-  screen (`perfOverlay`) keeps them in an overlay, top left. Read once a second and only while
-  shown; the quick menu's card reads memory alone, and the screen is drawn again only when a
-  number on it changed. Video memory: DXGI's adapters and PDH's `\GPU Adapter
-  Memory(*)\Dedicated Usage`, matched by LUID, on Windows; NVML and amdgpu's
-  `mem_info_vram_*` on Linux. Both are opened once on the short-lived `perf` thread (adding the
-  PDH counter takes about 120 ms; a read after that, 30 µs). QA U14 to U16.
+- **Performance** (`perf.rs`, `Ctl::Perf`, `SheetKind::Perf`, `view.rs` `draw_overlay`): in the
+  quick menu, CPU use, memory, and each card's use and video memory. Show on screen
+  (`perfOverlay`) adds the overlay: one line (CPU, GPU, RAM, VRAM of the card with the most,
+  FPS of the program in front) in a window of its own over every program. Windows: a layered,
+  click-through, unowned topmost window (`SofaOverlay`), drawn by the same Direct2D device into
+  a GDI-compatible bitmap and handed over with UpdateLayeredWindow, raised at each read. Linux:
+  an override-redirect, click-through winit window with its own softbuffer surface, raised
+  with XConfigureWindow. Read once a second and only while shown; the quick menu's card reads
+  memory alone, Sofa's own screen is drawn again only when a number on it changed, and the
+  overlay only when its numbers did.
+- Sources: GetSystemTimes and `/proc/stat` for CPU; DXGI's adapters and PDH's
+  `\GPU Adapter Memory(*)\Dedicated Usage` and `\GPU Engine(*)\Utilization Percentage`
+  (summed per engine type, the busiest type taken, as Task Manager does), matched by LUID, on
+  Windows; NVML and amdgpu's `mem_info_vram_*` and `gpu_busy_percent` on Linux. They are
+  opened once on the short-lived `perf` thread (adding the PDH counters takes about half a
+  second; a read after that, under a millisecond).
+- **Frame rate** (`perf::frames`, Windows): an ETW real-time session, "Sofa frame rate", with
+  Microsoft-Windows-DXGI (Present_Start 42, PresentMultiplaneOverlay_Start 55, minus
+  DXGI_PRESENT_TEST) and Microsoft-Windows-D3D9 (Present_Start 1), raw QPC time stamps. It runs
+  only while the overlay is up and never in QA; startup stops one left by a Sofa that was ended.
+  Events arrive up to two seconds late, so a program's rate is the average over the last two
+  seconds of its frames that arrived. Starting it needs Performance Log Users (or an elevated
+  Sofa); `frames::allow` asks Windows with its administrator prompt, as Game Bar does. Chromium
+  apps present from a helper process and get no rate; Vulkan and OpenGL games neither (the
+  DxgKrnl provider would add them). `cargo test --bin sofa frames_are_counted -- --ignored`
+  checks it against whatever presents on the PC. QA U14 to U16.
 - **Builds**: the release profile already had LTO, one code unit, `panic = "abort"` and
   stripped symbols; Linux builds also target x86-64-v2 (`.cargo/config.toml`).
 - README: installing on Linux, connecting Discord and Spotify step by step, and "Versions".

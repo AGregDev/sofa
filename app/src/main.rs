@@ -476,6 +476,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         WM_QUERYENDSESSION => return LRESULT(1),
         WM_ENDSESSION => {
             with_app(|app| app.save());
+            perf::watch_frames(false);
             return LRESULT(0);
         }
         WM_DESTROY => {
@@ -488,6 +489,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 return r;
             }
         }
+    }
+    // SAFETY: default handling for everything else.
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+/// The overlay's window: clicks go through to whatever is under it.
+#[cfg(windows)]
+extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if msg == WM_NCHITTEST {
+        return LRESULT(HTTRANSPARENT as isize);
     }
     // SAFETY: default handling for everything else.
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -615,6 +626,13 @@ fn main() -> Result<()> {
             (None, false) => (WS_POPUP, 0, 0, sw, sh),
         };
         let hwnd = CreateWindowExW(WS_EX_APPWINDOW, class, w!("Sofa"), style, x, y, w, h, None, None, Some(instance.into()), None)?;
+        // The performance overlay: a window of its own over every program, games included,
+        // layered, click-through and never activated; drawn by `App::draw_overlay`. Unowned, so
+        // it stays up while Sofa is minimized.
+        let overlay_class = if qa_run { w!("SofaOverlayQA") } else { w!("SofaOverlay") };
+        RegisterClassExW(&WNDCLASSEXW { cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32, lpfnWndProc: Some(overlay_proc), hInstance: instance.into(), lpszClassName: overlay_class, ..Default::default() });
+        let topmost = if qa_run { WINDOW_EX_STYLE(0) } else { WS_EX_TOPMOST };
+        let overlay = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | topmost, overlay_class, w!("Sofa overlay"), WS_POPUP, 0, 0, 1, 1, None, None, Some(instance.into()), None).map_or(0, |o| o.0 as isize);
 
         let cache = data.join("cache");
         let _ = std::fs::create_dir_all(&cache);
@@ -628,13 +646,16 @@ fn main() -> Result<()> {
         let icon_png = asset("sofa-icon.png", ICON_PNG);
         let welcome_jpg = asset("sofa-welcome.jpg", WELCOME_JPG);
         let started = now();
-        let g = gfx::Gfx::new(hwnd, FONT)?;
+        let mut g = gfx::Gfx::new(hwnd, FONT)?;
+        g.set_overlay(overlay);
         let inp = input::Input::new(hwnd, START.with(|s| *s));
         let sh = shell::Shell::new(hwnd.0 as isize, false);
         let mut app = ui::App::new(g, inp, sh, data, icon_png, welcome_jpg, qa_run, now());
         if !qa_run {
             shell::watch_foreground();
             let _ = RegisterHotKey(Some(hwnd), 1, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 0x48);
+            // A frame rate session left by a Sofa that was ended (an update stops it hard).
+            perf::watch_frames(false);
         }
         app.startup(now());
         app.boot_at = now();
@@ -755,6 +776,8 @@ fn main() -> Result<()> {
             }
         }
         with_app(|app| app.save());
+        // The frame rate's ETW session outlives Sofa unless it is stopped.
+        perf::watch_frames(false);
         if relaunch && let Ok(exe) = std::env::current_exe() {
             let mut rest: Vec<String> = args.iter().skip(1).filter(|a| *a != "--relaunch").cloned().collect();
             rest.push("--relaunch".into());

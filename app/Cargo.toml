@@ -77,6 +77,9 @@ features = [
   "Win32_Security_Cryptography",
   "Win32_System_Pipes",
   "Win32_System_Performance",
+  "Win32_System_Diagnostics_Etw",
+  "Win32_System_Time",
+  "Win32_Security_Authorization",
 ]
 
 # Linux: an X11 window (also under XWayland), drawn on the CPU. Everything here is Rust or loaded
