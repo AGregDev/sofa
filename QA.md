@@ -235,6 +235,24 @@ Wayland first, then Ubuntu on Xorg, and an Arch-based system with KDE Plasma (Wa
 
 ## Results
 
+### 2.3.2 (2026-11-28)
+
+- The frame rate of Vulkan and OpenGL games (Microsoft-Windows-DxgKrnl's present events, each
+  frame counted once; HANDOFF, "New in 2.3.2").
+- Windows frame rate, the opt-in `frames_are_counted` with test windows paced at known rates on
+  an AMD RX 7800 XT: OpenGL 50, Vulkan 70, DXGI flip 90, DXGI blt 40, Direct3D 9Ex 30, each
+  exactly its rate (AMD's drivers present windowed Vulkan and OpenGL through DXGI). Kernel-only
+  presents (drivers that skip DXGI): unit tests only. M26 over real Vulkan and OpenGL games:
+  not walked.
+- Unit tests (new: each frame counted once, present events read as PresentMon reads them) and
+  clippy on both targets: all PASS, no warnings.
+- Automated UI run: 76 of 76 PASS. Home: 67.4 MB working set, 88.5 MB private; first frame in
+  82 ms.
+- Build, install: B1 to B3 PASS. `dist\Sofa-Setup-2.3.2.exe` (2.1 MB, version resource 2.3.2)
+  replaced the installed 2.3.1 while it ran: Installed apps shows 2.3.2, the installed file is
+  the setup's, the Start menu shortcut and the start-with-Windows entry point at it, and Sofa
+  2.3.2 started from it. B4 not rerun.
+
 ### 2.3.1 (2026-11-28)
 
 - The setup and Uninstall no longer fail with "os error 32" when a Sofa started as
