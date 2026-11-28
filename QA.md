@@ -158,7 +158,7 @@ These need a person, a TV and a controller.
 | M23 | With Steam open (desktop layout on), ○ on Home goes back and never opens the focused tile, on a DualSense and on an Xbox pad |
 | M24 | Xbox pad: the first-run screen and Settings offer "Keep Game Bar off the Xbox button"; with it on, the Xbox button opens Sofa and not Game Bar; off again, Game Bar opens as before |
 | M25 | A game in the background (Assassin's Creed IV): ✕ on its Running card, Resume in its menu, and Stay awake on the sleep warning bring it back without the game reading the press (the character does not jump) |
-| M26 | Performance: CPU, GPU and video memory agree with Task Manager. With Show on screen, start a DirectX game: the overlay stays over it (borderless or windowed), over Sofa when PS brings it back, and over the desktop; its FPS agrees with the game's own counter or Game Bar's. Without Performance Log Users, Allow shows Windows' prompt, and after signing in again the frame rate shows |
+| M26 | Performance: CPU, GPU and video memory agree with Task Manager. With Show on screen, start a DirectX game: the overlay stays over it (borderless or windowed), over Sofa when PS brings it back, and over the desktop; its FPS agrees with the game's own counter or Game Bar's. The same for a Vulkan and an OpenGL game (an emulator counts), on an NVIDIA card too if there is one: the FPS shows, and is not doubled. Without Performance Log Users, Allow shows Windows' prompt, and after signing in again the frame rate shows |
 
 ## 6. Linux
 
@@ -234,6 +234,24 @@ Wayland first, then Ubuntu on Xorg, and an Arch-based system with KDE Plasma (Wa
 | LM18 | Performance: an NVIDIA card (proprietary driver) and an AMD card show their use and video memory as `nvidia-smi` and `amdgpu_top` do; an Intel card says it is not reported. The overlay stays over a Proton game on GNOME (Wayland and Xorg) and KDE |
 
 ## Results
+
+### 2.3.2 (2026-11-28)
+
+- The frame rate of Vulkan and OpenGL games (Microsoft-Windows-DxgKrnl's present events, each
+  frame counted once; HANDOFF, "New in 2.3.2").
+- Windows frame rate, the opt-in `frames_are_counted` with test windows paced at known rates on
+  an AMD RX 7800 XT: OpenGL 50, Vulkan 70, DXGI flip 90, DXGI blt 40, Direct3D 9Ex 30, each
+  exactly its rate (AMD's drivers present windowed Vulkan and OpenGL through DXGI). Kernel-only
+  presents (drivers that skip DXGI): unit tests only. M26 over real Vulkan and OpenGL games:
+  not walked.
+- Unit tests (new: each frame counted once, present events read as PresentMon reads them) and
+  clippy on both targets: all PASS, no warnings.
+- Automated UI run: 76 of 76 PASS. Home: 67.4 MB working set, 88.5 MB private; first frame in
+  82 ms.
+- Build, install: B1 to B3 PASS. `dist\Sofa-Setup-2.3.2.exe` (2.1 MB, version resource 2.3.2)
+  replaced the installed 2.3.1 while it ran: Installed apps shows 2.3.2, the installed file is
+  the setup's, the Start menu shortcut and the start-with-Windows entry point at it, and Sofa
+  2.3.2 started from it. B4 not rerun.
 
 ### 2.3.1 (2026-11-28)
 

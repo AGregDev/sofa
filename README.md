@@ -147,9 +147,9 @@ mode shows it.
 On Windows the frame rate comes from the frames Windows sees a game present, as Game Bar's
 does, so it needs the same permission: membership of **Performance Log Users**. Without it,
 Performance offers **Frame rate in games: Allow**; Windows asks once for an administrator, and
-the frame rate shows after you sign out and back in. It counts games made with DirectX 9 to 12;
-Vulkan and OpenGL games show none yet. On Linux the overlay shows the other numbers (GPU use and
-video memory for NVIDIA's driver and AMD cards).
+the frame rate shows after you sign out and back in. It counts games made with DirectX 9 to 12,
+Vulkan and OpenGL, emulators among them. On Linux the overlay shows the other numbers (GPU use
+and video memory for NVIDIA's driver and AMD cards).
 
 ## Connect Discord and Spotify
 
@@ -207,12 +207,13 @@ paste. On Windows **Ctrl+Alt+H** brings Sofa to the front from anywhere.
 
 ## Versions
 
-Only the [latest release](https://github.com/AGregDev/sofa/releases/latest) is supported.
-Sofa 2.3 is the first for Linux; everything before it is deprecated:
+Sofa 2.3 is the finished product and the first for Linux. Every release from 2.3.0 on stays
+supported; a newer one adds to it, and the [latest release](https://github.com/AGregDev/sofa/releases/latest)
+has the most. Everything before 2.3 is deprecated:
 
 | Version | Status |
 | --- | --- |
-| 2.3 | Supported: Windows and Linux |
+| 2.3.0 and later | Supported: Windows and Linux |
 | 2.0 to 2.2.2 | Deprecated. Run the newest setup file: it replaces them and keeps your settings |
 | 1.x (Electron) | Deprecated. The native Sofa replaced it in 2.0; its setup removes 1.x and keeps the settings and the Discord sign-in |
 
