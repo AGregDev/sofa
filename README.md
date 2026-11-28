@@ -97,7 +97,7 @@ on both systems.
 
 ### Windows
 
-1. Download **`Sofa-Setup-<version>.exe`** from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa. It replaces any older Sofa and keeps your settings.
+1. Download **`Sofa-Setup-<version>.exe`** from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa. It replaces any older Sofa and keeps your settings; if Sofa was started as administrator, the setup asks you to quit it first.
 2. On the first screen, choose whether Sofa starts with Windows and keeps Steam off the PS button (with an Xbox controller: also Game Bar off the Xbox button), then **Continue**.
 3. Steam also listens to the PS button. Sofa turns off Steam's **Guide button focuses Steam** for you: by itself when Steam is closed, or after asking when Steam is open (Steam restarts in the background). You can turn this off in Settings.
 

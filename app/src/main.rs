@@ -511,6 +511,13 @@ fn message_box(title: &str, text: &str, question: bool) -> bool {
     unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from(title), flags | MB_SETFOREGROUND) == IDYES }
 }
 
+/// A warning with Retry and Cancel: true for Retry.
+#[cfg(windows)]
+fn retry_box(title: &str, text: &str) -> bool {
+    // SAFETY: a modal message box with owned strings.
+    unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from(title), MB_RETRYCANCEL | MB_ICONWARNING | MB_SETFOREGROUND) == IDRETRY }
+}
+
 /// `--size 1600x900`: a borderless window of that size (screenshots in the QA run).
 pub(crate) fn size_arg(args: &[String]) -> Option<(i32, i32)> {
     let i = args.iter().position(|a| a == "--size")?;
@@ -553,21 +560,35 @@ fn main() -> Result<()> {
     }
 
     if has("--uninstall") {
-        // `--quiet` skips the question (scripts, and the QA install check).
-        if has("--quiet") || message_box("Uninstall Sofa", "Remove Sofa from this PC? Your settings stay, so installing it again picks up where you left off.", true) {
-            install::uninstall();
+        // `--quiet` skips the questions (scripts, and the QA install check).
+        let quiet = has("--quiet");
+        if quiet || message_box("Uninstall Sofa", "Remove Sofa from this PC? Your settings stay, so installing it again picks up where you left off.", true) {
+            while matches!(install::uninstall(), Err(install::Failure::StillOpen)) {
+                if quiet || !retry_box("Uninstall Sofa", "Sofa is still open, and it can't be closed from here (it was probably started as administrator). Quit Sofa from its Settings, then choose Retry.") {
+                    break;
+                }
+            }
         }
         return Ok(());
     }
     if install::is_setup() && !qa_run {
         let autostart = store::Store::open(&store::data_dir()).flag("launchAtLogin");
-        match install::install(env!("CARGO_PKG_VERSION"), autostart) {
-            Ok(exe) => {
-                let _ = std::process::Command::new(&exe).spawn();
+        loop {
+            match install::install(env!("CARGO_PKG_VERSION"), autostart) {
+                Ok(exe) => {
+                    let _ = std::process::Command::new(&exe).spawn();
+                }
+                // A Sofa started as administrator outlives this setup's stop: ask to quit it.
+                Err(install::Failure::StillOpen) => {
+                    if retry_box("Sofa", "Sofa is still open, and this setup can't close it (it was probably started as administrator). Quit Sofa from its Settings, then choose Retry.") {
+                        continue;
+                    }
+                }
+                Err(install::Failure::Error(e)) => {
+                    message_box("Sofa", &format!("Sofa couldn't be installed. {e}"), false);
+                }
             }
-            Err(e) => {
-                message_box("Sofa", &format!("Sofa couldn't be installed. {e}"), false);
-            }
+            break;
         }
         return Ok(());
     }
