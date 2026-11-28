@@ -3,15 +3,15 @@
 Where Sofa stands, for the next session. Read [MAP.md](MAP.md) first, then the ADRs it
 points to, then `../../CLAUDE.md`.
 
-## State (2026-11-28, 2.3.0 released)
+## State (2026-11-28, 2.3.1 released)
 
-- Sofa 2.3.0 is the native app (ADR-008) for Windows and, new, Linux (ADR-010), released from
-  `main` as v2.3.0 with `Sofa-Setup-2.3.0.exe` and `Sofa-Setup-2.3.0-x86_64.AppImage`. It
+- Sofa 2.3.1 is the native app (ADR-008) for Windows and, new in 2.3, Linux (ADR-010), released
+  from `main` as v2.3.1 with `Sofa-Setup-2.3.1.exe` and `Sofa-Setup-2.3.1-x86_64.AppImage`. It
   passes the automated QA run (76 checks) on both, `cargo test --workspace` and
   `cargo clippy --workspace --all-targets` with no warnings. Of the manual checks only M21
   (Spotify connect, for 2.2.2) and M25 (on the TV, for 2.2.1) were walked; none on Linux
   hardware.
-- Only the latest release is supported: the GitHub releases before 2.3.0 say they are
+- Only the latest release is supported: the GitHub releases before 2.3.1 say they are
   deprecated, and the README's "Versions" says the same.
 - It installs itself (`Sofa-Setup-<version>.exe`), replaces Sofa 1.x keeping
   `%APPDATA%\sofa`, and uninstalls from Installed apps (`Sofa.exe --uninstall`).

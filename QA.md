@@ -243,16 +243,19 @@ Wayland first, then Ubuntu on Xorg, and an Arch-based system with KDE Plasma (Wa
 - B5, the Cancel half, on this PC with the installed Sofa running as administrator: the setup
   showed "Sofa is still open, and this setup can't close it (it was probably started as
   administrator). Quit Sofa from its Settings, then choose Retry." after 3.3 s; Cancel left the
-  installed file and the running Sofa as they were. The Retry half and Uninstall's prompt: not
-  walked.
+  installed file and the running Sofa as they were. The Retry half when the release was
+  installed: the person quit that Sofa from its Settings and chose Retry, and the setup went on.
+  Uninstall's prompt: not walked.
 - Unit tests (new: a running program holds its own file; a file open for reading elsewhere is
   held; no file is not) and clippy on both targets: all PASS, no warnings. Linux workflow on
   the pull request: PASS.
 - Automated UI run: 76 of 76 PASS. Home: 78.7 MB working set, 97.5 MB private, 17 threads,
   0 % idle CPU; 17.5 MB after giving memory back; first frame in 80 ms (2.3.0's runs measured
   67.4 and 68.7 MB; nothing on Home changed).
-- B2 and B3 not rerun: the installed Sofa on this PC runs as administrator (the B5 case), so
-  the setup asks to quit it. `dist\Sofa-Setup-2.3.1.exe` (2.1 MB, version resource 2.3.1).
+- Build, install: B1 to B3 PASS. `dist\Sofa-Setup-2.3.1.exe` (2.1 MB, version resource 2.3.1,
+  the release's file) replaced the installed 2.3.0 once Retry was chosen: Installed apps shows
+  2.3.1, the installed file is the setup's, the Start menu shortcut and the start-with-Windows
+  entry point at it, and Sofa 2.3.1 started from it, no longer as administrator. B4 not rerun.
 
 ### 2.3.0 (2026-11-28)
 
