@@ -83,7 +83,7 @@ Windows, and on Linux it is an X11 program drawn on the CPU, with the same look.
 
 | | Sofa 1.3 (Electron) | Sofa 2.3 on Windows | Sofa 2.3 on Linux |
 | --- | --- | --- | --- |
-| Memory on Home | 564 MB, 6 processes | 55 to 70 MB, 1 process | about 40 MB, 1 process |
+| Memory on Home | 564 MB, 6 processes | 55 to 80 MB, 1 process | about 40 MB, 1 process |
 | Memory while a game runs | same | about 18 MB (Sofa gives its art back) | about 33 MB |
 | Idle CPU | a helper polling every 30 ms | 0 % (it sleeps until something happens) | 0 % |
 | Download | 122 MB installer, 358 MB installed | 2.1 MB, one file | 4.6 MB, one AppImage |
@@ -97,7 +97,7 @@ on both systems.
 
 ### Windows
 
-1. Download **`Sofa-Setup-<version>.exe`** from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa. It replaces any older Sofa and keeps your settings.
+1. Download **`Sofa-Setup-<version>.exe`** from the [latest release](https://github.com/AGregDev/sofa/releases/latest) and run it. It installs for your user only, with no admin prompt, and starts Sofa. It replaces any older Sofa and keeps your settings; if Sofa was started as administrator, the setup asks you to quit it first.
 2. On the first screen, choose whether Sofa starts with Windows and keeps Steam off the PS button (with an Xbox controller: also Game Bar off the Xbox button), then **Continue**.
 3. Steam also listens to the PS button. Sofa turns off Steam's **Guide button focuses Steam** for you: by itself when Steam is closed, or after asking when Steam is open (Steam restarts in the background). You can turn this off in Settings.
 
@@ -207,12 +207,13 @@ paste. On Windows **Ctrl+Alt+H** brings Sofa to the front from anywhere.
 
 ## Versions
 
-Only the [latest release](https://github.com/AGregDev/sofa/releases/latest) is supported.
-Sofa 2.3 is the first for Linux; everything before it is deprecated:
+Sofa 2.3 is the finished product and the first for Linux. Every release from 2.3.0 on stays
+supported; a newer one adds to it, and the [latest release](https://github.com/AGregDev/sofa/releases/latest)
+has the most. Everything before 2.3 is deprecated:
 
 | Version | Status |
 | --- | --- |
-| 2.3 | Supported: Windows and Linux |
+| 2.3.0 and later | Supported: Windows and Linux |
 | 2.0 to 2.2.2 | Deprecated. Run the newest setup file: it replaces them and keeps your settings |
 | 1.x (Electron) | Deprecated. The native Sofa replaced it in 2.0; its setup removes 1.x and keeps the settings and the Discord sign-in |
 

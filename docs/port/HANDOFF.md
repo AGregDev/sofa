@@ -3,22 +3,23 @@
 Where Sofa stands, for the next session. Read [MAP.md](MAP.md) first, then the ADRs it
 points to, then `../../CLAUDE.md`.
 
-## State (2026-11-28, 2.3.0 released)
+## State (2026-11-28, 2.3.2 released)
 
-- Sofa 2.3.0 is the native app (ADR-008) for Windows and, new, Linux (ADR-010), released from
-  `main` as v2.3.0 with `Sofa-Setup-2.3.0.exe` and `Sofa-Setup-2.3.0-x86_64.AppImage`. It
+- Sofa 2.3.2 is the native app (ADR-008) for Windows and, new in 2.3, Linux (ADR-010), released
+  from `main` as v2.3.2 with `Sofa-Setup-2.3.2.exe` and `Sofa-Setup-2.3.2-x86_64.AppImage`. It
   passes the automated QA run (76 checks) on both, `cargo test --workspace` and
   `cargo clippy --workspace --all-targets` with no warnings. Of the manual checks only M21
   (Spotify connect, for 2.2.2) and M25 (on the TV, for 2.2.1) were walked; none on Linux
   hardware.
-- Only the latest release is supported: the GitHub releases before 2.3.0 say they are
-  deprecated, and the README's "Versions" says the same.
+- Sofa is a finished product from 2.3.0 on: a new release no longer deprecates the ones before
+  it (the user's decision, 2026-11-28). The releases before 2.3.0 still say they are
+  deprecated, and so does 2.3.0's, marked before that decision; the README's "Versions" lists
+  2.3.0 and later as supported.
 - It installs itself (`Sofa-Setup-<version>.exe`), replaces Sofa 1.x keeping
   `%APPDATA%\sofa`, and uninstalls from Installed apps (`Sofa.exe --uninstall`).
 - The 1.x features still missing are listed in `../../PRODUCT.md`, "Not yet in 2.x".
-- Since 2.3.0, not released: the frame rate of Vulkan and OpenGL games (below).
 
-## Not released yet
+## New in 2.3.2
 
 - **Vulkan and OpenGL frame rates** (`perf::frames`): the session also enables
   Microsoft-Windows-DxgKrnl, read as PresentMon reads it: Blit_Info 166, Flip_Info 168 and
@@ -60,6 +61,15 @@ points to, then `../../CLAUDE.md`.
   extension is the fix), the guard sees only desktop and panel windows, no Ctrl+Alt+H, no
   gamescope, CPU drawing at 4K.
 
+## New in 2.3.1
+
+- **A Sofa started as administrator** cannot be stopped by the setup (it is not elevated), so
+  2.3.0's setup failed with "os error 32". `install::install` and `install::uninstall` now
+  stop other Sofas (`stop_others`), wait up to three seconds until the installed file is no
+  longer held (`held`: a running program's file cannot be opened for writing) or no other
+  Sofa.exe runs (`platform::running_except`), and otherwise return `Failure::StillOpen`;
+  `main` asks to quit Sofa with Retry and Cancel. Nothing changes until it is gone.
+
 ## New in 2.3.0
 
 - **Linux**, above.
@@ -87,7 +97,7 @@ points to, then `../../CLAUDE.md`.
   seconds of its frames that arrived. Starting it needs Performance Log Users (or an elevated
   Sofa); `frames::allow` asks Windows with its administrator prompt, as Game Bar does. Chromium
   apps present from a helper process and get no rate; nor did Vulkan and OpenGL games whose
-  drivers skip DXGI, until DxgKrnl's events ("Not released yet").
+  drivers skip DXGI, until DxgKrnl's events ("New in 2.3.2").
   `cargo test --bin sofa frames_are_counted -- --ignored` checks it against whatever presents
   on the PC and prints each process's rate. QA U14 to U16.
 - **Builds**: the release profile already had LTO, one code unit, `panic = "abort"` and
@@ -191,8 +201,6 @@ points to, then `../../CLAUDE.md`.
 6. The performance overlay over real games (M26): its FPS against the game's own counter for a
    DirectX, a Vulkan and an OpenGL game, and over Sofa when PS brings it back. Then a Vulkan or
    OpenGL game on an NVIDIA card, whose presents only the kernel may tell of.
-7. The setup cannot replace a Sofa started as administrator: its taskkill is refused and the
-   copy fails (os error 32, seen for 2.3.0). Say "Quit Sofa, then run the setup again" then.
 
 ## Known issues
 

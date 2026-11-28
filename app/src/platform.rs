@@ -303,6 +303,11 @@ pub fn open_web(data: &Path, pick: &str, url: Option<&str>, tv: bool) -> (bool, 
 
 /// Whether a program with this file name (`steam.exe`) is running.
 pub fn process_running(name: &str) -> bool {
+    running_except(name, 0)
+}
+
+/// Whether a program with this file name runs in a process other than `except`.
+pub fn running_except(name: &str, except: u32) -> bool {
     use windows::Win32::System::Diagnostics::ToolHelp::*;
     // SAFETY: a process snapshot read into a local entry, closed before returning.
     unsafe {
@@ -312,7 +317,7 @@ pub fn process_running(name: &str) -> bool {
         if Process32FirstW(snap, &mut e).is_ok() {
             loop {
                 let len = e.szExeFile.iter().position(|&c| c == 0).unwrap_or(e.szExeFile.len());
-                if String::from_utf16_lossy(&e.szExeFile[..len]).eq_ignore_ascii_case(name) {
+                if e.th32ProcessID != except && String::from_utf16_lossy(&e.szExeFile[..len]).eq_ignore_ascii_case(name) {
                     found = true;
                     break;
                 }

@@ -28,6 +28,33 @@ fn this_exe() -> PathBuf {
     std::env::current_exe().unwrap_or_default()
 }
 
+/// Why installing or uninstalling stopped.
+pub enum Failure {
+    /// A Sofa that could not be stopped is still open: most likely one started as
+    /// administrator, which Windows does not let a program that is not stop. Nothing changed.
+    StillOpen,
+    Error(String),
+}
+
+/// Whether a running program holds `file`: a program's own file cannot be opened for writing
+/// while it runs. False when there is no such file.
+fn held(file: &Path) -> bool {
+    std::fs::OpenOptions::new().write(true).open(file).is_err_and(|e| e.raw_os_error() == Some(32))
+}
+
+/// Stops every other running Sofa, then waits up to three seconds for `gone` to say so. False
+/// when one is still there: it was started as administrator, and this program was not.
+fn stop_others(gone: impl Fn() -> bool) -> bool {
+    let _ = Command::new("taskkill").args(["/F", "/IM", "Sofa.exe", "/FI", &format!("PID ne {}", std::process::id())]).creation_flags(NO_WINDOW).status();
+    for _ in 0..15 {
+        if gone() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    gone()
+}
+
 /// Started as the setup file (its name contains "setup"), not as the installed app.
 pub fn is_setup() -> bool {
     this_exe().file_name().is_some_and(|n| n.to_string_lossy().to_lowercase().contains("setup"))
@@ -173,13 +200,15 @@ fn remove_sofa_1() {
 
 /// Installs this executable and returns the installed copy's path. `autostart` is the
 /// person's "Start Sofa with Windows" (on for a first install).
-pub fn install(version: &str, autostart: bool) -> std::result::Result<PathBuf, String> {
+pub fn install(version: &str, autostart: bool) -> std::result::Result<PathBuf, Failure> {
     remove_sofa_1();
     let dir = install_dir();
     let target = installed_exe();
-    // A running Sofa 2 holds its file: stop it first.
-    let _ = Command::new("taskkill").args(["/IM", "Sofa.exe", "/F"]).creation_flags(NO_WINDOW).status();
-    std::thread::sleep(std::time::Duration::from_millis(400));
+    // A running Sofa 2 holds its file: stop it first. One started as administrator cannot be
+    // stopped from here; the person quits it and tries again.
+    if !stop_others(|| !held(&target)) {
+        return Err(Failure::StillOpen);
+    }
     // The old uninstaller may still be removing its folder: try a few times.
     let mut copied = Err(String::new());
     for _ in 0..10 {
@@ -189,7 +218,7 @@ pub fn install(version: &str, autostart: bool) -> std::result::Result<PathBuf, S
         }
         std::thread::sleep(std::time::Duration::from_millis(700));
     }
-    copied?;
+    copied.map_err(Failure::Error)?;
     let _ = shortcut(&target, &start_menu_link());
     if let Some(key) = open_key(UNINSTALL, true) {
         set_string(key, "DisplayName", "Sofa");
@@ -211,9 +240,12 @@ pub fn install(version: &str, autostart: bool) -> std::result::Result<PathBuf, S
 
 /// Removes Sofa: shortcut, start with Windows, Installed apps entry and the program folder.
 /// Settings in `%APPDATA%\sofa` stay, so a reinstall picks up where it left off.
-pub fn uninstall() {
-    // A running Sofa holds its file: stop it (not this process).
-    let _ = Command::new("taskkill").args(["/F", "/IM", "Sofa.exe", "/FI", &format!("PID ne {}", std::process::id())]).creation_flags(NO_WINDOW).status();
+pub fn uninstall() -> std::result::Result<(), Failure> {
+    // A running Sofa holds its file: stop it (not this process). Nothing is removed while one
+    // started as administrator stays open.
+    if !stop_others(|| !crate::platform::running_except("Sofa.exe", std::process::id())) {
+        return Err(Failure::StillOpen);
+    }
     set_autostart(false);
     let _ = std::fs::remove_file(start_menu_link());
     // SAFETY: deleting our own key.
@@ -228,4 +260,26 @@ pub fn uninstall() {
         .raw_arg(format!("/C ping -n 4 127.0.0.1 >nul & rmdir /s /q \"{}\"", dir.display()))
         .creation_flags(NO_WINDOW | 0x0000_0008)
         .spawn();
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    #[test]
+    fn a_running_program_holds_its_file() {
+        assert!(held(&this_exe()), "this test's own executable");
+        let file = std::env::temp_dir().join(format!("sofa-held-{}.bin", std::process::id()));
+        std::fs::write(&file, b"sofa").unwrap();
+        assert!(!held(&file), "a file nothing has open");
+        // As Windows keeps a running program's file: readable, not writable.
+        let open = std::fs::OpenOptions::new().read(true).share_mode(1).open(&file).unwrap();
+        assert!(held(&file));
+        drop(open);
+        assert!(!held(&file));
+        std::fs::remove_file(&file).unwrap();
+        assert!(!held(&file), "no file at all (a first install)");
+    }
 }

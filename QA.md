@@ -114,6 +114,7 @@ reports it off; a missing Steam is reported, not guessed.
 | B2 | Run as `Sofa-Setup-<version>.exe`, it installs per user without admin, replaces Sofa 1.x (keeping `%APPDATA%\sofa`) and starts Sofa |
 | B3 | Installed apps lists Sofa with its version; the Start menu has Sofa; start with Windows points at the installed file |
 | B4 | `Sofa.exe --uninstall --quiet` removes the program, shortcut, start with Windows and the Installed apps entry, and keeps the settings |
+| B5 | With a Sofa started as administrator open, the setup (and Uninstall) says to quit it and offers Retry: Cancel changes nothing, Retry after quitting installs (or removes) |
 
 ## 4. On the desktop, with the installed app
 
@@ -233,6 +234,28 @@ Wayland first, then Ubuntu on Xorg, and an Arch-based system with KDE Plasma (Wa
 | LM18 | Performance: an NVIDIA card (proprietary driver) and an AMD card show their use and video memory as `nvidia-smi` and `amdgpu_top` do; an Intel card says it is not reported. The overlay stays over a Proton game on GNOME (Wayland and Xorg) and KDE |
 
 ## Results
+
+### 2.3.1 (2026-11-28)
+
+- The setup and Uninstall no longer fail with "os error 32" when a Sofa started as
+  administrator is open: they wait up to three seconds for it to close, then ask to quit it,
+  with Retry and Cancel (`install::Failure::StillOpen`), and change nothing until it is gone.
+- B5, the Cancel half, on this PC with the installed Sofa running as administrator: the setup
+  showed "Sofa is still open, and this setup can't close it (it was probably started as
+  administrator). Quit Sofa from its Settings, then choose Retry." after 3.3 s; Cancel left the
+  installed file and the running Sofa as they were. The Retry half when the release was
+  installed: the person quit that Sofa from its Settings and chose Retry, and the setup went on.
+  Uninstall's prompt: not walked.
+- Unit tests (new: a running program holds its own file; a file open for reading elsewhere is
+  held; no file is not) and clippy on both targets: all PASS, no warnings. Linux workflow on
+  the pull request: PASS.
+- Automated UI run: 76 of 76 PASS. Home: 78.7 MB working set, 97.5 MB private, 17 threads,
+  0 % idle CPU; 17.5 MB after giving memory back; first frame in 80 ms (2.3.0's runs measured
+  67.4 and 68.7 MB; nothing on Home changed).
+- Build, install: B1 to B3 PASS. `dist\Sofa-Setup-2.3.1.exe` (2.1 MB, version resource 2.3.1,
+  the release's file) replaced the installed 2.3.0 once Retry was chosen: Installed apps shows
+  2.3.1, the installed file is the setup's, the Start menu shortcut and the start-with-Windows
+  entry point at it, and Sofa 2.3.1 started from it, no longer as administrator. B4 not rerun.
 
 ### 2.3.0 (2026-11-28)
 
