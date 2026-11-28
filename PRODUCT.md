@@ -61,7 +61,8 @@ to start a game or switch apps.
     overlay in the top left corner, a window of its own over every game and app (not over
     exclusive full screen). Read only while they show. The frame rate needs Windows'
     Performance Log Users group, as Game Bar's does: Sofa offers to ask Windows once, and it
-    counts from the next sign-in. DirectX 9 to 12 games; Vulkan and OpenGL show none yet.
+    counts from the next sign-in. Games made with DirectX 9 to 12, Vulkan and OpenGL
+    (emulators among them), each frame counted once.
   - ≡ opens Settings from here.
 - Running cards name the program itself (Firefox, not the page it shows) with its
   own icon; the page or document shows beside "Running" in the hero.

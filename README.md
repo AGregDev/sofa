@@ -147,9 +147,9 @@ mode shows it.
 On Windows the frame rate comes from the frames Windows sees a game present, as Game Bar's
 does, so it needs the same permission: membership of **Performance Log Users**. Without it,
 Performance offers **Frame rate in games: Allow**; Windows asks once for an administrator, and
-the frame rate shows after you sign out and back in. It counts games made with DirectX 9 to 12;
-Vulkan and OpenGL games show none yet. On Linux the overlay shows the other numbers (GPU use and
-video memory for NVIDIA's driver and AMD cards).
+the frame rate shows after you sign out and back in. It counts games made with DirectX 9 to 12,
+Vulkan and OpenGL, emulators among them. On Linux the overlay shows the other numbers (GPU use
+and video memory for NVIDIA's driver and AMD cards).
 
 ## Connect Discord and Spotify
 

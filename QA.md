@@ -157,7 +157,7 @@ These need a person, a TV and a controller.
 | M23 | With Steam open (desktop layout on), ○ on Home goes back and never opens the focused tile, on a DualSense and on an Xbox pad |
 | M24 | Xbox pad: the first-run screen and Settings offer "Keep Game Bar off the Xbox button"; with it on, the Xbox button opens Sofa and not Game Bar; off again, Game Bar opens as before |
 | M25 | A game in the background (Assassin's Creed IV): ✕ on its Running card, Resume in its menu, and Stay awake on the sleep warning bring it back without the game reading the press (the character does not jump) |
-| M26 | Performance: CPU, GPU and video memory agree with Task Manager. With Show on screen, start a DirectX game: the overlay stays over it (borderless or windowed), over Sofa when PS brings it back, and over the desktop; its FPS agrees with the game's own counter or Game Bar's. Without Performance Log Users, Allow shows Windows' prompt, and after signing in again the frame rate shows |
+| M26 | Performance: CPU, GPU and video memory agree with Task Manager. With Show on screen, start a DirectX game: the overlay stays over it (borderless or windowed), over Sofa when PS brings it back, and over the desktop; its FPS agrees with the game's own counter or Game Bar's. The same for a Vulkan and an OpenGL game (an emulator counts), on an NVIDIA card too if there is one: the FPS shows, and is not doubled. Without Performance Log Users, Allow shows Windows' prompt, and after signing in again the frame rate shows |
 
 ## 6. Linux
 

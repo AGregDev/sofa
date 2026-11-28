@@ -330,11 +330,12 @@ fn values(counter: usize) -> Vec<(String, f64)> {
     out
 }
 
-/// The frame rate of the program in front, from the frames Windows sees programs present:
-/// DXGI's and Direct3D 9's present events (games made with Direct3D 9 to 12; Vulkan and OpenGL
-/// present otherwise), through an ETW session of Sofa's own that runs while the overlay is up.
-/// Starting one needs the Performance Log Users group or an administrator, as Game Bar's frame
-/// rate does.
+/// The frame rate of the program in front, from the frames Windows sees programs present,
+/// through an ETW session of Sofa's own that runs while the overlay is up: DXGI's and Direct3D
+/// 9's present events (games made with Direct3D 9 to 12), and the graphics kernel's for every
+/// other way to present (Vulkan and OpenGL, whose drivers may present to the kernel directly).
+/// A frame that both tell of is counted once (`Frames`). Starting the session needs the
+/// Performance Log Users group or an administrator, as Game Bar's frame rate does.
 #[cfg(windows)]
 pub mod frames {
     use std::collections::{HashMap, VecDeque};
@@ -344,12 +345,27 @@ pub mod frames {
     use windows::core::{GUID, HSTRING, PCWSTR, PWSTR};
 
     const NAME: &str = "Sofa frame rate";
-    /// Microsoft-Windows-DXGI: Present_Start (42) and PresentMultiplaneOverlay_Start (55).
-    const DXGI: GUID = GUID::from_u128(0xCA11C036_0102_4A2D_A6AD_F03CFED5D3C9);
-    /// Microsoft-Windows-D3D9: Present_Start (1).
-    const D3D9: GUID = GUID::from_u128(0x783ACA0A_790E_4D7F_8451_AA850511C6B9);
+    /// Microsoft-Windows-DXGI: Present_Start (42) and Present_Stop (43),
+    /// PresentMultiplaneOverlay_Start (55) and _Stop (56).
+    pub(super) const DXGI: GUID = GUID::from_u128(0xCA11C036_0102_4A2D_A6AD_F03CFED5D3C9);
+    /// Microsoft-Windows-D3D9: Present_Start (1) and Present_Stop (2).
+    pub(super) const D3D9: GUID = GUID::from_u128(0x783ACA0A_790E_4D7F_8451_AA850511C6B9);
     /// The keyword both providers' present events carry.
     const PRESENTS_KEYWORD: u64 = 0x8000_0000_0000_0002;
+    /// Microsoft-Windows-DxgKrnl, the graphics kernel, read as PresentMon reads it: Blit_Info
+    /// (166), Flip_Info (168) and FlipMultiPlaneOverlay_Info (252), PresentHistory_Start (171)
+    /// and PresentHistoryDetailed_Start (215) for flip-model presents (tokens), and Present_Info
+    /// (184), the end of the kernel's present call.
+    pub(super) const DXGKRNL: GUID = GUID::from_u128(0x802EC45A_1E99_4B83_9920_87C98277BA9D);
+    const KERNEL_EVENTS: [u16; 6] = [166, 168, 171, 184, 215, 252];
+    /// Its events must carry Base, as all of those do, and Base or Present (which Windows 11
+    /// adds to them), as PresentMon asks. Never its Performance keyword: on some versions of
+    /// Windows that slows the system down.
+    const KERNEL_ANY: u64 = 0x0800_0001;
+    const KERNEL_ALL: u64 = 0x1;
+    /// How long after DXGI's or Direct3D 9's Present a driver may still make the kernel's
+    /// present for it, from a thread of its own, in seconds.
+    const LATE: i64 = 1;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum State {
@@ -363,8 +379,8 @@ pub mod frames {
     static STATE: Mutex<State> = Mutex::new(State::Off);
     /// The session while it runs.
     static SESSION: Mutex<Option<u64>> = Mutex::new(None);
-    /// Each process's presents in the last few seconds, as performance-counter ticks.
-    static PRESENTS: Mutex<Option<HashMap<u32, VecDeque<i64>>>> = Mutex::new(None);
+    /// Each process's frames while the session runs.
+    static FRAMES: Mutex<Option<Frames>> = Mutex::new(None);
 
     pub fn state() -> State {
         STATE.lock().map_or(State::Failed, |s| *s)
@@ -452,8 +468,8 @@ pub mod frames {
                 None => ControlTraceW(CONTROLTRACE_HANDLE::default(), &HSTRING::from(NAME), props.as_mut_ptr().cast(), EVENT_TRACE_CONTROL_STOP),
             };
         }
-        if let Ok(mut p) = PRESENTS.lock() {
-            *p = None;
+        if let Ok(mut f) = FRAMES.lock() {
+            *f = None;
         }
         if state() == State::On {
             set(State::Off);
@@ -481,12 +497,9 @@ pub mod frames {
             set(if err == ERROR_ACCESS_DENIED { State::NotAllowed } else { State::Failed });
             return;
         }
-        for provider in [DXGI, D3D9] {
-            // SAFETY: enables a provider in our session.
-            unsafe {
-                let _ = EnableTraceEx2(handle, &provider, EVENT_CONTROL_CODE_ENABLE_PROVIDER.0, 4, PRESENTS_KEYWORD, 0, 0, None);
-            }
-        }
+        enable(handle, DXGI, PRESENTS_KEYWORD, 0, &[42, 43, 55, 56]);
+        enable(handle, D3D9, PRESENTS_KEYWORD, 0, &[1, 2]);
+        enable(handle, DXGKRNL, KERNEL_ANY, KERNEL_ALL, &KERNEL_EVENTS);
         if let Ok(mut s) = SESSION.lock() {
             *s = Some(handle.Value);
         }
@@ -512,53 +525,228 @@ pub mod frames {
         }
     }
 
-    /// One event from the session: a present is noted for its process.
+    /// Enables `provider` in the session for the events `ids` alone: Windows drops its other
+    /// events before they are written (the kernel's Base keyword covers far more than presents).
+    fn enable(handle: CONTROLTRACE_HANDLE, provider: GUID, any: u64, all: u64, ids: &[u16]) {
+        // EVENT_FILTER_EVENT_ID: FilterIn (TRUE) and Reserved in one u16, the count, the ids.
+        let filter: Vec<u16> = [1, ids.len() as u16].into_iter().chain(ids.iter().copied()).collect();
+        let mut desc = EVENT_FILTER_DESCRIPTOR { Ptr: filter.as_ptr() as u64, Size: (filter.len() * 2) as u32, Type: EVENT_FILTER_TYPE_EVENT_ID };
+        let params = ENABLE_TRACE_PARAMETERS {
+            Version: ENABLE_TRACE_PARAMETERS_VERSION_2,
+            EnableProperty: EVENT_ENABLE_PROPERTY_IGNORE_KEYWORD_0,
+            EnableFilterDesc: &mut desc,
+            FilterDescCount: 1,
+            ..Default::default()
+        };
+        // SAFETY: enables a provider in our session; the filter outlives the call.
+        let err = unsafe { EnableTraceEx2(handle, &provider, EVENT_CONTROL_CODE_ENABLE_PROVIDER.0, 4, any, all, 0, Some(&params)) };
+        if err != ERROR_SUCCESS {
+            crate::log(&format!("frame rate: {provider:?} not enabled ({})", err.0));
+        }
+    }
+
+    /// One event from the session: what it tells of a present is noted for its process.
     unsafe extern "system" fn on_event(record: *mut EVENT_RECORD) {
         // SAFETY: ETW hands the callback a valid record for the duration of the call.
         let r = unsafe { &*record };
         let h = &r.EventHeader;
-        let id = h.EventDescriptor.Id;
-        let present = if h.ProviderId == DXGI && (id == 42 || id == 55) {
-            // The swap chain's address, then the flags: DXGI_PRESENT_TEST (1) shows no frame.
-            let ptr = if h.Flags & 0x20 != 0 { 4 } else { 8 };
-            let flags = if usize::from(r.UserDataLength) >= ptr + 4 && !r.UserData.is_null() {
-                // SAFETY: inside the event's data, as its length says.
-                unsafe { std::ptr::read_unaligned(r.UserData.cast::<u8>().add(ptr).cast::<u32>()) }
-            } else {
-                0
-            };
-            flags & 1 == 0
+        let data = if r.UserData.is_null() {
+            &[][..]
         } else {
-            h.ProviderId == D3D9 && id == 1
+            // SAFETY: the event's data, as long as its length says, for the duration of the call.
+            unsafe { std::slice::from_raw_parts(r.UserData.cast::<u8>(), usize::from(r.UserDataLength)) }
         };
-        if !present {
-            return;
-        }
+        let pointer = if u32::from(h.Flags) & EVENT_HEADER_FLAG_32_BIT_HEADER != 0 { 4 } else { 8 };
+        let Some(event) = read(h.ProviderId, h.EventDescriptor.Id, pointer, data) else { return };
         let (_, freq) = ticks();
-        let Ok(mut map) = PRESENTS.lock() else { return };
-        let map = map.get_or_insert_with(HashMap::new);
-        let times = map.entry(h.ProcessId).or_default();
-        times.push_back(h.TimeStamp);
-        while times.front().is_some_and(|&t| h.TimeStamp - t > 3 * freq) {
-            times.pop_front();
-        }
-        // Processes that stopped presenting a while ago are forgotten.
-        if map.len() > 64 {
-            map.retain(|_, t| t.back().is_some_and(|&last| h.TimeStamp - last < 10 * freq));
+        if let Ok(mut frames) = FRAMES.lock() {
+            frames.get_or_insert_with(Frames::default).note(h.ProcessId, h.ThreadId, h.TimeStamp, freq, event);
         }
     }
 
-    /// `pid`'s frame rate over the last two seconds of its frames that arrived (they arrive in
-    /// batches up to two seconds late). None when nothing arrived for four seconds.
+    /// What an event tells of a present, from its provider, id and data (pointers in it are
+    /// `pointer` bytes long), as PresentMon reads them.
+    pub(super) fn read(provider: GUID, id: u16, pointer: usize, data: &[u8]) -> Option<Event> {
+        let u32_at = |at: usize| data.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
+        if provider == DXGI {
+            match id {
+                // The swap chain's address, then the flags: DXGI_PRESENT_TEST (1) shows no frame.
+                42 | 55 => (u32_at(pointer).unwrap_or(0) & 1 == 0).then_some(Event::Present),
+                43 | 56 => Some(Event::Returned),
+                _ => None,
+            }
+        } else if provider == D3D9 {
+            match id {
+                1 => Some(Event::Present),
+                2 => Some(Event::Returned),
+                _ => None,
+            }
+        } else if provider == DXGKRNL {
+            match id {
+                166 => Some(Event::Kernel(Step::Blit, true)),
+                168 | 252 => Some(Event::Kernel(Step::Flip, true)),
+                // The adapter, the token, then the present model: GDI's (1) and
+                // DirectComposition's (7) presents are no game's frames.
+                171 | 215 => Some(Event::Kernel(Step::Token, !matches!(u32_at(2 * pointer), Some(1 | 7)))),
+                184 => Some(Event::KernelReturned),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    /// What an event tells of a present.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum Event {
+        /// DXGI's or Direct3D 9's Present starts: a frame (Direct3D 9 to 12).
+        Present,
+        /// ... and returns.
+        Returned,
+        /// The graphics kernel works on a present: a step of DirectX's, or a frame of its own
+        /// (Vulkan, OpenGL). False: GDI's or DirectComposition's, which is no game's frame.
+        Kernel(Step, bool),
+        /// The kernel's present call returns (Present_Info).
+        KernelReturned,
+    }
+
+    /// What the kernel does for a present: a blit, a flip (once for each plane) or a token.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum Step {
+        Blit = 1,
+        Flip = 2,
+        Token = 4,
+    }
+
+    /// Each process's frames, every frame counted once whichever events tell of it, as
+    /// PresentMon matches them: a DirectX frame at its Present, with the kernel's events for it
+    /// matched to it (on the same thread, or on a driver's thread a little later); a present the
+    /// kernel alone tells of is a frame of its own.
+    #[derive(Default)]
+    pub(super) struct Frames {
+        /// Each process's frames in the last few seconds, as performance-counter ticks.
+        times: HashMap<u32, VecDeque<i64>>,
+        /// Each process's DirectX presents the kernel has not been seen to make yet: when, and
+        /// on which thread.
+        waiting: HashMap<u32, VecDeque<(i64, u32)>>,
+        /// The present each thread is in the middle of.
+        open: HashMap<u32, Open>,
+    }
+
+    /// A present a thread is in the middle of.
+    struct Open {
+        pid: u32,
+        at: i64,
+        /// DXGI's or Direct3D 9's, counted at its Present; else the kernel's alone.
+        direct: bool,
+        /// The kernel's present for a DirectX one, made on a driver's thread.
+        driver: bool,
+        /// The steps the kernel was seen to take (`Step` bits).
+        steps: u8,
+    }
+
+    impl Frames {
+        pub(super) fn note(&mut self, pid: u32, tid: u32, at: i64, freq: i64, event: Event) {
+            match event {
+                Event::Present => {
+                    self.count(pid, at, freq);
+                    self.open.insert(tid, Open { pid, at, direct: true, driver: false, steps: 0 });
+                    let waiting = self.waiting.entry(pid).or_default();
+                    waiting.push_back((at, tid));
+                    if waiting.len() > 8 {
+                        waiting.pop_front();
+                    }
+                }
+                // The kernel's side may still come, from a driver's thread.
+                Event::Returned => {
+                    if self.open.get(&tid).is_some_and(|o| o.direct && !o.driver) {
+                        self.open.remove(&tid);
+                    }
+                }
+                Event::Kernel(step, frame) => self.kernel(pid, tid, at, freq, step as u8, frame),
+                Event::KernelReturned => {
+                    if self.open.get(&tid).is_some_and(|o| !o.direct || o.driver) {
+                        self.open.remove(&tid);
+                    }
+                }
+            }
+            // Threads and processes that stopped presenting a while ago are forgotten.
+            if self.open.len() > 256 {
+                self.open.retain(|_, o| at - o.at < 3 * freq);
+            }
+            if self.waiting.len() > 64 {
+                self.waiting.retain(|_, w| w.back().is_some_and(|&(t, _)| at - t < 3 * freq));
+            }
+        }
+
+        fn kernel(&mut self, pid: u32, tid: u32, at: i64, freq: i64, step: u8, frame: bool) {
+            if let Some(o) = self.open.get_mut(&tid).filter(|o| o.pid == pid) {
+                if o.direct {
+                    // DirectX's present, on the thread that made it: its first step matches it.
+                    if o.steps == 0
+                        && !o.driver
+                        && let Some(waiting) = self.waiting.get_mut(&pid)
+                    {
+                        let own = (o.at, tid);
+                        waiting.retain(|&w| w != own);
+                    }
+                    o.steps |= step;
+                    return;
+                }
+                if o.steps & step == 0 {
+                    // Another step of the same present.
+                    o.steps |= step;
+                    return;
+                }
+                // The same step again: the next present (the end of this one was not seen).
+            }
+            if !frame {
+                return;
+            }
+            // A DirectX present that a driver makes on a thread of its own, after Present.
+            if let Some(waiting) = self.waiting.get_mut(&pid) {
+                while waiting.front().is_some_and(|&(t, _)| at - t > LATE * freq) {
+                    waiting.pop_front();
+                }
+                if waiting.pop_front().is_some() {
+                    self.open.insert(tid, Open { pid, at, direct: true, driver: true, steps: step });
+                    return;
+                }
+            }
+            // The program's own present through the kernel (Vulkan, OpenGL): a frame.
+            self.count(pid, at, freq);
+            self.open.insert(tid, Open { pid, at, direct: false, driver: false, steps: step });
+        }
+
+        fn count(&mut self, pid: u32, at: i64, freq: i64) {
+            let times = self.times.entry(pid).or_default();
+            times.push_back(at);
+            while times.front().is_some_and(|&t| at - t > 3 * freq) {
+                times.pop_front();
+            }
+            // Processes that stopped presenting a while ago are forgotten.
+            if self.times.len() > 64 {
+                self.times.retain(|_, t| t.back().is_some_and(|&last| at - last < 10 * freq));
+            }
+        }
+
+        /// `pid`'s frame rate at `now` over the last two seconds of its frames that arrived
+        /// (they arrive in batches up to two seconds late). None when nothing arrived for four
+        /// seconds.
+        pub(super) fn fps(&self, pid: u32, now: i64, freq: i64) -> Option<u32> {
+            let times = self.times.get(&pid)?;
+            let last = *times.back()?;
+            if now - last > 4 * freq {
+                return None;
+            }
+            Some(rate(times.iter().copied().filter(|&t| last - t <= 2 * freq), freq))
+        }
+    }
+
+    /// `pid`'s frame rate now (`Frames::fps`).
     pub fn fps(pid: u32) -> Option<u32> {
         let (now, freq) = ticks();
-        let map = PRESENTS.lock().ok()?;
-        let times = map.as_ref()?.get(&pid)?;
-        let last = *times.back()?;
-        if now - last > 4 * freq {
-            return None;
-        }
-        Some(rate(times.iter().copied().filter(|&t| last - t <= 2 * freq), freq))
+        FRAMES.lock().ok()?.as_ref()?.fps(pid, now, freq)
     }
 
     /// Frames per second from present times (in order, `freq` ticks a second).
@@ -621,20 +809,21 @@ pub mod frames {
         r.0 as isize > 32
     }
 
-    /// Each process's presents: how many, and the first's and last's age in seconds (the
-    /// opt-in test).
+    /// Each process's frames: how many, the first's and last's age in seconds, and its frame
+    /// rate (the opt-in test).
     #[cfg(test)]
-    pub fn dump() -> Vec<(u32, usize, f64, f64)> {
+    pub fn dump() -> Vec<(u32, usize, f64, f64, Option<u32>)> {
         let (now, freq) = ticks();
-        let Ok(map) = PRESENTS.lock() else { return Vec::new() };
-        map.as_ref().map_or_else(Vec::new, |m| m.iter().map(|(p, t)| (*p, t.len(), (now - t.front().copied().unwrap_or(now)) as f64 / freq as f64, (now - t.back().copied().unwrap_or(now)) as f64 / freq as f64)).collect())
+        let Ok(frames) = FRAMES.lock() else { return Vec::new() };
+        let Some(f) = frames.as_ref() else { return Vec::new() };
+        let age = |t: Option<&i64>| (now - t.copied().unwrap_or(now)) as f64 / freq as f64;
+        f.times.iter().map(|(&pid, t)| (pid, t.len(), age(t.front()), age(t.back()), f.fps(pid, now, freq))).collect()
     }
 
     /// The process presenting the most frames, and its frame rate (the opt-in test).
     #[cfg(test)]
     pub fn busiest() -> Option<(u32, u32)> {
-        let pids: Vec<u32> = PRESENTS.lock().ok()?.as_ref()?.keys().copied().collect();
-        pids.into_iter().filter_map(|p| Some((p, fps(p)?))).max_by_key(|(_, f)| *f)
+        dump().into_iter().filter_map(|(pid, _, _, _, fps)| Some((pid, fps?))).max_by_key(|&(_, fps)| fps)
     }
 
     /// The frame rate of the program in front (not Sofa's own).
@@ -904,8 +1093,73 @@ mod tests {
         assert_eq!(frames::rate(std::iter::empty(), freq), 0);
     }
 
+    /// The frame rate of process 7 when it shows Windows `frame`'s events (thread, event) for
+    /// each of its frames, 60 frames a second for two seconds.
+    #[cfg(windows)]
+    fn rate_of(frame: &[(u32, frames::Event)]) -> Option<u32> {
+        let freq = 10_000_000;
+        let mut f = frames::Frames::default();
+        for i in 0..=120 {
+            for (k, &(tid, event)) in frame.iter().enumerate() {
+                f.note(7, tid, i * freq / 60 + k as i64 * 1000, freq, event);
+            }
+        }
+        f.fps(7, 2 * freq, freq)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn each_frame_is_counted_once() {
+        use frames::Event::{Kernel, KernelReturned, Present, Returned};
+        use frames::Step::{Blit, Flip, Token};
+        // Direct3D 10 to 12, flip model: DXGI's Present and the kernel's token, on one thread.
+        assert_eq!(rate_of(&[(1, Present), (1, Kernel(Token, true)), (1, KernelReturned), (1, Returned)]), Some(60));
+        // Direct3D 9, and DXGI's blt model: a blit, then a token.
+        assert_eq!(rate_of(&[(1, Present), (1, Kernel(Blit, true)), (1, Kernel(Token, true)), (1, KernelReturned), (1, Returned)]), Some(60));
+        // Exclusive full screen: a flip for each plane.
+        assert_eq!(rate_of(&[(1, Present), (1, Kernel(Flip, true)), (1, Kernel(Flip, true)), (1, KernelReturned), (1, Returned)]), Some(60));
+        // A driver that presents on a thread of its own once Present returned.
+        assert_eq!(rate_of(&[(1, Present), (1, Returned), (2, Kernel(Token, true)), (2, KernelReturned)]), Some(60));
+        // Vulkan and OpenGL presenting to the kernel directly: a token, a blit and a token, a flip.
+        assert_eq!(rate_of(&[(1, Kernel(Token, true)), (1, KernelReturned)]), Some(60));
+        assert_eq!(rate_of(&[(1, Kernel(Blit, true)), (1, Kernel(Token, true)), (1, KernelReturned)]), Some(60));
+        assert_eq!(rate_of(&[(1, Kernel(Flip, true)), (1, KernelReturned)]), Some(60));
+        // ... also when the end of the kernel's present is not seen.
+        assert_eq!(rate_of(&[(1, Kernel(Blit, true)), (1, Kernel(Token, true))]), Some(60));
+        // GDI's and DirectComposition's presents are no game's frames.
+        assert_eq!(rate_of(&[(1, Kernel(Token, false)), (1, KernelReturned)]), None);
+        // An emulator: its window presents through DXGI on one thread, its game through Vulkan
+        // on another.
+        assert_eq!(rate_of(&[(1, Present), (1, Kernel(Token, true)), (1, KernelReturned), (1, Returned), (2, Kernel(Token, true)), (2, KernelReturned)]), Some(120));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn present_events_are_read_as_presentmon_reads_them() {
+        use frames::{D3D9, DXGI, DXGKRNL, Event, Step, read};
+        // DXGI's Present_Start: the swap chain's address, then the flags.
+        let dxgi = |pointer: usize, flags: u32| [vec![0; pointer], flags.to_le_bytes().to_vec()].concat();
+        assert_eq!(read(DXGI, 42, 8, &dxgi(8, 0)), Some(Event::Present));
+        assert_eq!(read(DXGI, 55, 4, &dxgi(4, 0)), Some(Event::Present));
+        assert_eq!(read(DXGI, 42, 8, &dxgi(8, 1)), None, "DXGI_PRESENT_TEST shows no frame");
+        assert_eq!(read(DXGI, 43, 8, &[]), Some(Event::Returned));
+        assert_eq!(read(D3D9, 1, 8, &[]), Some(Event::Present));
+        assert_eq!(read(D3D9, 2, 8, &[]), Some(Event::Returned));
+        // PresentHistory: the adapter, the token, then the present model.
+        let token = |pointer: usize, model: u32| [vec![0; 2 * pointer], model.to_le_bytes().to_vec()].concat();
+        assert_eq!(read(DXGKRNL, 215, 8, &token(8, 2)), Some(Event::Kernel(Step::Token, true)), "a flip-model present");
+        assert_eq!(read(DXGKRNL, 171, 8, &token(8, 3)), Some(Event::Kernel(Step::Token, true)), "a blt-model present");
+        assert_eq!(read(DXGKRNL, 171, 4, &token(4, 1)), Some(Event::Kernel(Step::Token, false)), "GDI");
+        assert_eq!(read(DXGKRNL, 171, 8, &token(8, 7)), Some(Event::Kernel(Step::Token, false)), "DirectComposition");
+        assert_eq!(read(DXGKRNL, 166, 8, &[]), Some(Event::Kernel(Step::Blit, true)));
+        assert_eq!(read(DXGKRNL, 252, 8, &[]), Some(Event::Kernel(Step::Flip, true)));
+        assert_eq!(read(DXGKRNL, 184, 8, &[]), Some(Event::KernelReturned));
+        assert_eq!(read(DXGKRNL, 172, 8, &token(8, 2)), None, "a token handed to the compositor is no present");
+    }
+
     /// Opt-in (`cargo test --bin sofa frames_are_counted -- --ignored`): starts the ETW session
     /// and needs a program presenting frames meanwhile (a browser, a game, Wallpaper Engine).
+    /// With `--nocapture` it prints each process's frame rate and the one in front.
     #[cfg(windows)]
     #[test]
     #[ignore = "starts an ETW session; needs Performance Log Users and a program presenting frames"]
@@ -913,7 +1167,8 @@ mod tests {
         frames::watch(true);
         assert_eq!(frames::state(), frames::State::On, "the session starts");
         std::thread::sleep(std::time::Duration::from_secs(3));
-        eprintln!("presents (pid, count, first s ago, last s ago): {:?}", frames::dump());
+        eprintln!("frames (pid, count, first s ago, last s ago, fps): {:?}", frames::dump());
+        eprintln!("the program in front: {:?} fps", frames::in_front());
         let busiest = frames::busiest();
         frames::watch(false);
         assert_eq!(frames::state(), frames::State::Off);

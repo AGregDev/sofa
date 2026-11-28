@@ -16,6 +16,33 @@ points to, then `../../CLAUDE.md`.
 - It installs itself (`Sofa-Setup-<version>.exe`), replaces Sofa 1.x keeping
   `%APPDATA%\sofa`, and uninstalls from Installed apps (`Sofa.exe --uninstall`).
 - The 1.x features still missing are listed in `../../PRODUCT.md`, "Not yet in 2.x".
+- Since 2.3.0, not released: the frame rate of Vulkan and OpenGL games (below).
+
+## Not released yet
+
+- **Vulkan and OpenGL frame rates** (`perf::frames`): the session also enables
+  Microsoft-Windows-DxgKrnl, read as PresentMon reads it: Blit_Info 166, Flip_Info 168 and
+  FlipMultiPlaneOverlay_Info 252, PresentHistory_Start 171 and PresentHistoryDetailed_Start 215
+  (flip-model tokens; present models 1, GDI, and 7, DirectComposition, are no game's frames),
+  and Present_Info 184, the end of the kernel's present call. Keywords Base or Present with
+  Base required, never Performance (it slows some Windows versions down). Every provider now
+  gets an event-ID filter, so Windows drops the other events before writing them; DXGI's
+  Present_Stop (43, 56) and D3D9's (2) are read too.
+- Each frame counts once (`Frames`, as PresentMon matches them): a DirectX frame at its
+  Present_Start, as before, and the kernel's events on the same thread until its Present_Stop
+  belong to it. So does the first kernel present on another thread, within a second, while one
+  of the process's DirectX presents has had none (a driver's thread). Any other kernel present
+  is a frame of its own: Present_Info ends it, and the same step again (a second blit, flip or
+  token) starts the next. Unit tests `each_frame_is_counted_once` and
+  `present_events_are_read_as_presentmon_reads_them`.
+- Seen on this PC (AMD RX 7800 XT, driver 32.0.32029, Windows 11 26100): AMD's drivers present
+  windowed Vulkan and OpenGL through DXGI themselves, child windows too, so DXGI's events
+  already carried their frames, and every DirectX present also shows its kernel side on the
+  same thread, which the matching keeps from counting twice. With test windows paced at known
+  rates, the opt-in test measured OpenGL 50, Vulkan 70, DXGI flip 90, DXGI blt 40 and Direct3D
+  9Ex 30 frames a second, each its own rate. Presents that only the kernel tells of (drivers
+  that skip DXGI, as NVIDIA's may for Vulkan and OpenGL) are covered by the unit tests alone:
+  no driver here makes them in a window.
 
 ## Linux (new in 2.3.0)
 
@@ -59,9 +86,10 @@ points to, then `../../CLAUDE.md`.
   Events arrive up to two seconds late, so a program's rate is the average over the last two
   seconds of its frames that arrived. Starting it needs Performance Log Users (or an elevated
   Sofa); `frames::allow` asks Windows with its administrator prompt, as Game Bar does. Chromium
-  apps present from a helper process and get no rate; Vulkan and OpenGL games neither (the
-  DxgKrnl provider would add them). `cargo test --bin sofa frames_are_counted -- --ignored`
-  checks it against whatever presents on the PC. QA U14 to U16.
+  apps present from a helper process and get no rate; nor did Vulkan and OpenGL games whose
+  drivers skip DXGI, until DxgKrnl's events ("Not released yet").
+  `cargo test --bin sofa frames_are_counted -- --ignored` checks it against whatever presents
+  on the PC and prints each process's rate. QA U14 to U16.
 - **Builds**: the release profile already had LTO, one code unit, `panic = "abort"` and
   stripped symbols; Linux builds also target x86-64-v2 (`.cargo/config.toml`).
 - README: installing on Linux, connecting Discord and Spotify step by step, and "Versions".
@@ -160,9 +188,9 @@ points to, then `../../CLAUDE.md`.
 4. Custom covers and uninstalling from Sofa (the `cover` override is already read).
 5. Automate D1 to D4: a real Sofa in a window, PS posted as WM_PAD_HOME, then the foreground
    and minimized state checked (how this round's desktop bug was reproduced).
-6. The performance overlay over a real game (M26): its FPS against the game's own counter, and
-   over Sofa when PS brings it back. Then Vulkan and OpenGL frame rates (Microsoft-Windows-
-   DxgKrnl's present events, as PresentMon reads them).
+6. The performance overlay over real games (M26): its FPS against the game's own counter for a
+   DirectX, a Vulkan and an OpenGL game, and over Sofa when PS brings it back. Then a Vulkan or
+   OpenGL game on an NVIDIA card, whose presents only the kernel may tell of.
 7. The setup cannot replace a Sofa started as administrator: its taskkill is refused and the
    copy fails (os error 32, seen for 2.3.0). Say "Quit Sofa, then run the setup again" then.
 
