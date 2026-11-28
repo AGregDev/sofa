@@ -246,7 +246,13 @@ Wayland first, then Ubuntu on Xorg, and an Arch-based system with KDE Plasma (Wa
   installed file and the running Sofa as they were. The Retry half and Uninstall's prompt: not
   walked.
 - Unit tests (new: a running program holds its own file; a file open for reading elsewhere is
-  held; no file is not) and clippy on both targets: all PASS, no warnings.
+  held; no file is not) and clippy on both targets: all PASS, no warnings. Linux workflow on
+  the pull request: PASS.
+- Automated UI run: 76 of 76 PASS. Home: 78.7 MB working set, 97.5 MB private, 17 threads,
+  0 % idle CPU; 17.5 MB after giving memory back; first frame in 80 ms (2.3.0's runs measured
+  67.4 and 68.7 MB; nothing on Home changed).
+- B2 and B3 not rerun: the installed Sofa on this PC runs as administrator (the B5 case), so
+  the setup asks to quit it. `dist\Sofa-Setup-2.3.1.exe` (2.1 MB, version resource 2.3.1).
 
 ### 2.3.0 (2026-11-28)
 
